@@ -1,0 +1,782 @@
+/* ── Reset ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: "Segoe UI", Arial, "Noto Sans Hebrew", sans-serif;
+  background: #f3f6f9;
+  color: #1a1a2e;
+  line-height: 1.7;
+  font-size: 16px;
+  direction: rtl;
+}
+
+button { font-family: inherit; cursor: pointer; }
+
+/* ── Chat screen (full-viewport flex column) ───────────────────── */
+.screen {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.btn-primary {
+  background: #1e4976;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 0.75rem 1.6rem;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+
+.btn-primary:hover { background: #16395d; }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── Chat header ───────────────────────────────────────────────── */
+.chat-header {
+  background: linear-gradient(135deg, #1a3a5c 0%, #1e4976 100%);
+  color: white;
+  padding: 0.9rem 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  flex-shrink: 0;
+}
+
+.chat-title { flex: 1; font-weight: 600; font-size: 1.05rem; }
+
+.btn-header-action {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.35);
+  color: white;
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.btn-header-action:hover { background: rgba(255,255,255,0.25); }
+
+.chat-messages {
+  flex: 1;
+  min-height: 0; /* required in a flex column so this shrinks and scrolls
+                    instead of pushing the input row / footer off-screen */
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.2rem 1rem 0.5rem;
+  overflow-y: auto;
+}
+
+.msg-row { display: flex; margin-bottom: 0.9rem; }
+.msg-row--user { justify-content: flex-start; }
+.msg-row--bot { justify-content: flex-end; }
+
+.msg-bubble {
+  max-width: 80%;
+  border-radius: 14px;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+.msg-bubble--user {
+  background: #1e4976;
+  color: white;
+  border-bottom-left-radius: 4px;
+}
+
+.msg-bubble--bot {
+  background: white;
+  color: #1a1a2e;
+  border: 1px solid #e1e8f0;
+  border-bottom-right-radius: 4px;
+}
+
+.msg-bubble.msg-warning {
+  background: #fff4e5;
+  border-color: #f0b95e;
+}
+
+.msg-bubble.msg-notice {
+  background: #eef4fa;
+  border-color: #9cc3e6;
+}
+
+.msg-text { white-space: pre-wrap; }
+
+.msg-disclaimer {
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #d7e1ea;
+  font-size: 0.78rem;
+  color: #6b7785;
+}
+
+.msg-llm-badge {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: #5a7a96;
+  font-style: italic;
+}
+
+.suggested-chips {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.suggested-chip {
+  background: #f1f6fb;
+  border: 1px solid #cfe0f0;
+  color: #1e4976;
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+}
+
+.suggested-chip:hover { background: #dcebf9; }
+.suggested-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Demo strip ─────────────────────────────────────────────────── */
+/* Compact scrollable row of predefined demo questions. Appears     */
+/* between the chat header and the message list.                     */
+.demo-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 1rem;
+  background: #eef4fa;
+  border-bottom: 1px solid #cfe0f0;
+  flex-shrink: 0;
+}
+
+.demo-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  overflow-x: auto;
+  /* scrollbar on bottom; start scroll from right in RTL */
+  direction: rtl;
+  /* hide scrollbar track — content still scrollable */
+  scrollbar-width: thin;
+  scrollbar-color: #c5d8ec transparent;
+}
+
+.demo-strip-label {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: #4a6a8a;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.demo-btn {
+  flex-shrink: 0;
+  background: white;
+  border: 1px solid #9cc3e6;
+  color: #1e4976;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.76rem;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+
+.demo-btn:hover { background: #dcebf9; }
+.demo-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.demo-strip-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #8b97a5;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.demo-strip-close:hover { color: #1e4976; }
+
+/* ── Gene metadata expandable panel ────────────────────────────── */
+/* Appears inside bot bubbles for gene_clinvar_summary answers.     */
+.gene-meta-panel {
+  margin-top: 0.55rem;
+  border: 1px solid #cfe0f0;
+  border-radius: 8px;
+  font-size: 0.77rem;
+  overflow: hidden;
+}
+
+.gene-meta-summary {
+  padding: 0.3rem 0.6rem;
+  background: #eef4fa;
+  cursor: pointer;
+  color: #2a5780;
+  font-weight: 600;
+  list-style: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Hide default browser triangle; we provide our own indicator */
+.gene-meta-summary::-webkit-details-marker { display: none; }
+
+.gene-meta-indicator {
+  display: inline-block;
+  font-size: 0.65rem;
+  transition: transform 0.15s;
+}
+
+details[open] .gene-meta-indicator { transform: rotate(90deg); }
+
+.gene-meta-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #f8fbfe;
+}
+
+.gene-meta-table th,
+.gene-meta-table td {
+  padding: 0.2rem 0.6rem;
+  text-align: right;
+  border-bottom: 1px solid #e1edf5;
+  vertical-align: top;
+}
+
+.gene-meta-table tr:last-child th,
+.gene-meta-table tr:last-child td { border-bottom: none; }
+
+.gene-meta-table th {
+  color: #5a7a96;
+  font-weight: 600;
+  white-space: nowrap;
+  width: 42%;
+}
+
+.gene-meta-table td { color: #1a3a5c; }
+
+.gene-meta-section-label {
+  margin: 0.5rem 0.6rem 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #5a7a96;
+}
+
+.gene-meta-phenotypes {
+  margin: 0 0.6rem 0.4rem 1.5rem;
+  padding: 0;
+  list-style: disc;
+  font-size: 0.8rem;
+  color: #1a3a5c;
+  line-height: 1.5;
+}
+
+/* ── Error banner ───────────────────────────────────────────────── */
+.error-banner {
+  flex-shrink: 0;
+  background: #fff0f0;
+  border-top: 2px solid #e07070;
+  color: #8a1a1a;
+  font-size: 0.88rem;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.error-banner-close {
+  background: none;
+  border: none;
+  color: #8a1a1a;
+  font-size: 1rem;
+  cursor: pointer;
+  margin-inline-start: auto;
+  flex-shrink: 0;
+}
+
+/* ── Feedback row ───────────────────────────────────────────────── */
+.feedback-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  padding-top: 0.45rem;
+  border-top: 1px dashed #d7e1ea;
+  flex-wrap: wrap;
+}
+
+.feedback-label {
+  font-size: 0.76rem;
+  color: #6b7785;
+  white-space: nowrap;
+}
+
+.feedback-btn {
+  background: white;
+  border: 1px solid #cfe0f0;
+  color: #1e4976;
+  border-radius: 999px;
+  padding: 0.18rem 0.6rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+
+.feedback-btn:hover { background: #eef4fa; }
+.feedback-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.feedback-btn--active {
+  background: #1e4976;
+  color: white;
+  border-color: #1e4976;
+}
+
+.feedback-btn--active:hover { background: #16395d; }
+
+.feedback-thanks {
+  font-size: 0.76rem;
+  color: #2a8a4a;
+}
+
+.feedback-reason-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+  margin-top: 0.3rem;
+  width: 100%;
+}
+
+.feedback-reason-select {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 0.76rem;
+  border: 1px solid #cfe0f0;
+  border-radius: 8px;
+  padding: 0.2rem 0.5rem;
+  color: #1a1a2e;
+  background: white;
+  direction: rtl;
+}
+
+.feedback-send-btn {
+  flex-shrink: 0;
+  background: #1e4976;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.22rem 0.65rem;
+  font-size: 0.76rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.feedback-send-btn:hover { background: #16395d; }
+
+/* ── Chat input row ────────────────────────────────────────────── */
+.chat-input-row {
+  flex-shrink: 0;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem;
+  background: white;
+  border-top: 1px solid #e1e8f0;
+}
+
+.chat-input-row textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid #cfd9e3;
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  direction: rtl;
+}
+
+.chat-input-row textarea:focus {
+  outline: none;
+  border-color: #1e4976;
+}
+
+.chat-footer-note {
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #8b97a5;
+  padding: 0.4rem 1rem 0.9rem;
+  background: white;
+}
+
+/* ── Unverified gene draft card ───────────────────────────────── */
+.unverified-draft-card {
+  margin-top: 0.85rem;
+  border: 1.5px dashed #b8860b;
+  border-radius: 8px;
+  background: #fffdf0;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.9rem;
+}
+
+.unverified-draft-btn {
+  background: none;
+  border: 1px solid #b8860b;
+  color: #7a5a00;
+  border-radius: 6px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.88rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unverified-draft-btn:hover {
+  background: #fff3cd;
+  color: #5a4000;
+}
+
+.unverified-draft-loading {
+  color: #7a5a00;
+  font-style: italic;
+  font-size: 0.88rem;
+}
+
+.unverified-draft-details {
+  border: none;
+  background: transparent;
+}
+
+.unverified-draft-summary {
+  font-weight: 600;
+  color: #7a5a00;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.unverified-draft-summary::before {
+  content: "⚠";
+  font-size: 0.85rem;
+}
+
+.unverified-draft-subtitle {
+  font-size: 0.8rem;
+  color: #8b7040;
+  margin: 0 0 0.5rem 0;
+  font-style: italic;
+}
+
+.unverified-draft-warning {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.82rem;
+  color: #5a4000;
+  margin-bottom: 0.6rem;
+  line-height: 1.6;
+}
+
+.unverified-draft-text {
+  color: #333;
+  font-size: 0.9rem;
+  line-height: 1.75;
+  margin-bottom: 0.5rem;
+}
+
+.unverified-draft-footer {
+  font-size: 0.78rem;
+  color: #8b7040;
+  font-style: italic;
+  border-top: 1px solid #e8d88a;
+  padding-top: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.unverified-draft-unavailable {
+  color: #888;
+  font-size: 0.88rem;
+  font-style: italic;
+}
+
+/* ── ClinVar technical details card (Tier 2) ──────────────────── */
+.clinvar-tech-card {
+  margin-top: 0.65rem;
+  border: 1px solid #b0c4de;
+  border-radius: 8px;
+  background: #f0f4f8;
+  font-size: 0.88rem;
+}
+
+.clinvar-tech-details {
+  border: none;
+  background: transparent;
+}
+
+.clinvar-tech-summary {
+  font-weight: 600;
+  color: #1e4976;
+  cursor: pointer;
+  list-style: none;
+  padding: 0.55rem 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+}
+
+.clinvar-tech-summary::before {
+  content: "▶";
+  font-size: 0.7rem;
+  transition: transform 0.2s;
+}
+
+.clinvar-tech-details[open] > .clinvar-tech-summary::before {
+  transform: rotate(90deg);
+}
+
+.clinvar-tech-subtitle {
+  font-size: 0.78rem;
+  color: #5a6a7a;
+  font-style: italic;
+  padding: 0 0.85rem 0.4rem;
+  margin: 0;
+}
+
+.clinvar-tech-total {
+  padding: 0 0.85rem 0.3rem;
+  color: #2a3a4a;
+  margin: 0;
+}
+
+.clinvar-tech-label {
+  font-weight: 600;
+  color: #2a3a4a;
+  padding: 0.4rem 0.85rem 0.2rem;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.clinvar-tech-table {
+  width: calc(100% - 1.7rem);
+  margin: 0 0.85rem 0.4rem;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.clinvar-tech-table th,
+.clinvar-tech-table td {
+  padding: 0.15rem 0.4rem;
+  text-align: right;
+}
+
+.clinvar-tech-table th {
+  color: #3a5a7a;
+  font-weight: 500;
+  width: 70%;
+}
+
+.clinvar-tech-table td {
+  color: #2a3a4a;
+  font-weight: 600;
+}
+
+.clinvar-tech-phenotypes {
+  margin: 0 0.85rem 0.4rem 1.8rem;
+  padding: 0;
+  font-size: 0.82rem;
+  color: #2a3a4a;
+}
+
+.clinvar-tech-note {
+  font-size: 0.76rem;
+  color: #6a7a8a;
+  font-style: italic;
+  border-top: 1px solid #c8d8e8;
+  padding: 0.4rem 0.85rem 0.55rem;
+  margin: 0.3rem 0 0;
+}
+
+/* ── Mobile responsiveness ──────────────────────────────────────── */
+@media (max-width: 600px) {
+  .chat-messages {
+    padding: 0.7rem 0.55rem 0.3rem;
+  }
+
+  .chat-input-row {
+    padding: 0.55rem 0.55rem;
+    gap: 0.4rem;
+  }
+
+  /* Prevent iOS auto-zoom on focus (font-size must be >= 16px) */
+  .chat-input-row textarea {
+    font-size: 1rem;
+    padding: 0.5rem 0.65rem;
+    min-height: 44px;
+  }
+
+  .btn-primary {
+    padding: 0.65rem 0.9rem;
+    min-width: 56px;
+    font-size: 0.95rem;
+  }
+
+  .btn-header-action {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .chat-title {
+    font-size: 0.95rem;
+  }
+
+  /* Wider bubbles on small screens */
+  .msg-bubble {
+    max-width: 93%;
+  }
+
+  /* Demo chips: wrap instead of horizontal scroll on very small */
+  .demo-scroll {
+    flex-wrap: wrap;
+    overflow-x: hidden;
+  }
+
+  .demo-btn {
+    font-size: 0.8rem;
+    padding: 0.3rem 0.7rem;
+    min-height: 36px;
+  }
+
+  /* Suggested chips */
+  .suggested-chip {
+    font-size: 0.82rem;
+    padding: 0.35rem 0.7rem;
+    min-height: 34px;
+  }
+
+  /* Unverified draft card — readable on narrow */
+  .unverified-draft-card {
+    padding: 0.5rem 0.65rem;
+    font-size: 0.85rem;
+  }
+
+  .unverified-draft-warning {
+    font-size: 0.8rem;
+  }
+
+  /* Technical card — collapsed by default; expanded content scrolls */
+  .clinvar-tech-table {
+    width: 100%;
+    margin: 0 0 0.4rem;
+    overflow-x: auto;
+    display: block;
+  }
+
+  /* Gene metadata table */
+  .gene-meta-table {
+    font-size: 0.8rem;
+  }
+
+  .chat-footer-note {
+    font-size: 0.72rem;
+    padding: 0.35rem 0.6rem 0.75rem;
+  }
+}
+
+/* ── Privacy notice overlay ─────────────────────────────────────── */
+#privacy-notice {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 20, 40, 0.62);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.privacy-card {
+  background: white;
+  border-radius: 14px;
+  padding: 1.6rem 1.8rem 1.4rem;
+  max-width: 460px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+  direction: rtl;
+}
+
+.privacy-card h2 {
+  font-size: 1.1rem;
+  color: #1a3a5c;
+  margin-bottom: 0.85rem;
+  font-weight: 700;
+}
+
+.privacy-card p {
+  font-size: 0.9rem;
+  color: #2a3a4a;
+  line-height: 1.75;
+  margin-bottom: 0.75rem;
+}
+
+.privacy-card .privacy-no-share {
+  background: #fff4e5;
+  border: 1px solid #f0b95e;
+  border-radius: 8px;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.88rem;
+  color: #5a3a00;
+  margin-bottom: 1rem;
+}
+
+.privacy-btn {
+  display: block;
+  width: 100%;
+  background: #1e4976;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 0.82rem;
+  font-size: 1rem;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.privacy-btn:hover { background: #16395d; }
+
+@media (max-width: 480px) {
+  .privacy-card {
+    padding: 1.2rem 1.1rem 1rem;
+  }
+
+  .privacy-card h2 {
+    font-size: 1rem;
+  }
+
+  .privacy-card p {
+    font-size: 0.85rem;
+  }
+}

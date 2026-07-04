@@ -1,0 +1,17 @@
+
+.env
+*.env
+.env.*
+
+# Local backups / old deploy artifacts
+backups/
+app_backup_before_counseling_mvp_*/
+app/*.bak.*
+app/static.bak.*/
+*.bak
+*.tar.gz
+deploy_*.sh
+
+# Local databases / heavy files
+*.duckdb
+data/*.duckdb

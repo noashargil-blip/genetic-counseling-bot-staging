@@ -1,0 +1,26 @@
+# ── Core web framework ───────────────────────────────────────────────────────
+fastapi==0.124.4
+uvicorn==0.38.0
+pydantic==2.12.5
+python-multipart==0.0.29
+
+# ── Gene index / ClinVar data (duckdb; graceful fallback when DB file missing) ──
+duckdb==1.5.2
+
+# ── Upload parsing: Excel + CSV/TSV report files ────────────────────────────
+# Required by app/upload_parser.py at import time.
+# Set DISABLE_UPLOADS=true to gate the endpoints; the import still occurs.
+pandas==2.3.3
+openpyxl==3.1.5
+
+# ── HTTP client (health probes, local LLM calls) ────────────────────────────
+httpx==0.28.1
+
+# ── LLM — OpenAI (primary cloud/staging provider; LLM_PROVIDER=openai) ──────
+openai==2.37.0
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+pytest==9.0.3
+
+# ── Optional: Anthropic (Claude) — see requirements-llm.txt ─────────────────
+# anthropic==0.102.0

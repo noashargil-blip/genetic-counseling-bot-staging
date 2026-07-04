@@ -1,0 +1,23 @@
+# ── Optional LLM backends — university / development use only ────────────────
+#
+# These packages are NOT required for cloud/staging deployment.
+# Cloud staging uses LLM_PROVIDER=openai with OPENAI_API_KEY (see requirements.txt).
+#
+# Install in addition to requirements.txt:
+#   pip install -r requirements.txt -r requirements-llm.txt
+#
+# ── Anthropic (Claude) backend — LLM_PROVIDER=anthropic ─────────────────────
+anthropic==0.102.0
+
+# ── HuggingFace Hub (only needed for local model loading, NOT for HF endpoints) ──
+# HF Inference Endpoints (LLM_PROVIDER=huggingface_endpoint) need no extra package.
+# huggingface-hub>=0.20.0
+
+# ── Local GPU inference — Slurm / compute node ──────────────────────────────
+# LLM_PROVIDER=local uses LocalLLMClient (plain HTTP, no extra package).
+# If running the model server itself, install separately from a CUDA-compatible
+# torch wheel. Do NOT install torch/transformers via pip on login nodes.
+#
+# Example (on compute node only):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   pip install transformers accelerate

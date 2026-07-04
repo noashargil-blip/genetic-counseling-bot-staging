@@ -1,0 +1,28 @@
+[
+  {
+    "draft_id": "3aedcbb8-4478-4edd-b399-7bb838f3c188",
+    "gene_symbol": "POLE",
+    "draft_type": "clinvar_context_summary",
+    "text_he": "באופן כללי, שינויים בגן POLE מופיעים לעיתים בהקשרים של נטייה תורשתית למצבים סרטניים, נטייה לסרטן המעי הגס ומצבים הקשורים לגן POLE. חשוב להדגיש שזהו מידע כללי בלבד, ואינו אומר שהממצא האישי גורם למחלה או שיש לו משמעות פתוגנית.",
+    "based_on": "clinvar_metadata",
+    "source_note_he": "הטיוטה מבוססת על מידע כללי ממאגרי דיווחים גנטיים, ולא על בדיקה מקצועית של ממצא אישי.",
+    "generated_by_model": "deterministic",
+    "generated_at": "2026-07-04T09:54:29Z",
+    "created_from": "manual",
+    "content_hash": "351739a8f4050dcd",
+    "source_1_name": null,
+    "source_1_url_or_id": null,
+    "source_2_name": null,
+    "source_2_url_or_id": null,
+    "review_status": "approved_edited",
+    "approved": true,
+    "reviewed_by": "שם הרופא/ה או היועצת",
+    "reviewed_at": "2026-07-04T09:56:57Z",
+    "reviewer_notes": "Approved after professional review",
+    "original_text_he": "באופן כללי, שינויים בגן POLE מופיעים לעיתים בהקשרים של נטייה תורשתית למצבים סרטניים, נטייה לסרטן המעי הגס ומצבים הקשורים לגן POLE. חשוב להדגיש שזהו מידע כללי בלבד, ואינו אומר שהממצא האישי גורם למחלה או שיש לו משמעות פתוגנית.",
+    "edited_text_he": "באופן כללי, שינויים בגן POLE מופיעים לעיתים בהקשרים של נטייה תורשתית למצבים סרטניים, נטייה לסרטן המעי הגס ומצבים הקשורים לגן POLE. חשוב להדגיש שזהו מידע כללי בלבד, ואינו אומר שהממצא האישי גורם למחלה או שיש לו משמעות פתוגנית.",
+    "enqueued_at": "2026-07-04T09:54:29Z",
+    "last_seen_at": "2026-07-04T09:54:29Z",
+    "seen_count": 1
+  }
+]

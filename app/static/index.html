@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>מלווה לאחר ייעוץ גנטי</title>
+  <link rel="stylesheet" href="/static/styles.css?v=2.3.0" />
+</head>
+<body>
+
+<!-- Privacy notice — shown once before first interaction -->
+<div id="privacy-notice" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
+  <div class="privacy-card">
+    <h2 id="privacy-title">שימו לב לפני שמתחילים</h2>
+    <p>
+      המערכת מיועדת למידע כללי לאחר ייעוץ גנטי ואינה מחליפה ייעוץ רפואי אישי.
+      היא אינה מאבחנת ואינה מפרשת תוצאות בדיקה אישיות.
+    </p>
+    <div class="privacy-no-share">
+      <strong>אין להזין:</strong> שמות, מספרי תעודת זהות, מספרי טלפון, כתובות אימייל,
+      או דוחות רפואיים מלאים. הצ׳אט אינו נשמר ואינו מאוחסן.
+    </div>
+    <p>
+      המערכת בשלב ניסיוני (בטא). תוכן שנוצר על ידי בינה מלאכותית מסומן בבירור ואינו מהווה ייעוץ רפואי.
+    </p>
+    <button class="privacy-btn" id="privacy-ok">הבנתי — להתחיל</button>
+  </div>
+</div>
+
+<section id="screen-chat" class="screen">
+  <header class="chat-header">
+    <span class="chat-title">מלווה לאחר ייעוץ גנטי</span>
+    <button id="btn-clear-chat" class="btn-header-action" title="שיחה חדשה">שיחה חדשה</button>
+  </header>
+
+  <!-- Demo mode strip -->
+  <div id="demo-strip" class="demo-strip" role="region" aria-label="שאלות לדוגמה">
+    <div class="demo-scroll" id="demo-scroll"></div>
+    <button id="demo-strip-close" class="demo-strip-close" aria-label="הסתר שאלות לדוגמה">הסתר</button>
+  </div>
+
+  <div id="chat-messages" class="chat-messages"></div>
+
+  <!-- Error banner (hidden by default; shown on network/server errors) -->
+  <div id="error-banner" class="error-banner" hidden>
+    <span id="error-banner-text"></span>
+    <button id="error-banner-close" class="error-banner-close" aria-label="סגור">&#10005;</button>
+  </div>
+
+  <form id="chat-form" class="chat-input-row">
+    <textarea
+      id="chat-input"
+      rows="2"
+      placeholder="כתבי שאלה כללית, בלי פרטים מזהים..."
+    ></textarea>
+    <button id="btn-send" type="submit" class="btn-primary">שליחה</button>
+  </form>
+  <p class="chat-footer-note">
+    המידע כללי בלבד ואינו מהווה תחליף לייעוץ גנטי אישי. הצ'אט אינו נשמר.
+  </p>
+</section>
+
+<script src="/static/app.js?v=2.2.0"></script>
+</body>
+</html>
