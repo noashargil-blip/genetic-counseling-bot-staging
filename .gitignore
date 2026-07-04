@@ -13,5 +13,15 @@ app/static.bak.*/
 deploy_*.sh
 
 # Local databases / heavy files
+data/sessions.db
+
 *.duckdb
 data/*.duckdb
+
+# Allow selected ClinVar staging data
+!data/clinvar_gene_stats.duckdb
+!data/clinvar_nf1_only_backup.duckdb
+# Python cache
+__pycache__/
+*/__pycache__/
+*.pyc
