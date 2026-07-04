@@ -93,7 +93,7 @@ if _BASIC_AUTH_ENABLED:
             if not auth.startswith("Basic "):
                 return Response(
                     status_code=401,
-                    headers={"WWW-Authenticate": f'Basic realm="{_AUTH_REALM}"'},
+                    headers={"WWW-Authenticate": 'Basic realm="genetic-bot-staging"'},
                     content="Authentication required.",
                 )
             try:
