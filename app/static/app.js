@@ -195,6 +195,14 @@ async function sendQuestion(question, topic) {
       data.llm_used || false,
       data.fallback_used !== undefined ? data.fallback_used : true,
     );
+    // If the backend already included the draft, pre-populate it (no second request needed)
+    if (data.unverified_gene_draft) {
+      const botMsg = messages.find((m) => m.id === pendingId);
+      if (botMsg) {
+        botMsg.unverifiedDraft = data.unverified_gene_draft;
+        botMsg.unverifiedDraftState = 'loaded';
+      }
+    }
     lastTopic = data.matched_topic || lastTopic;
   } catch (err) {
     const msg = 'לא ניתן היה להתחבר לשרת. בדקי את החיבור לאינטרנט ונסי שוב.';
@@ -521,12 +529,16 @@ async function loadUnverifiedDraft(msgId) {
 
 function buildUnverifiedDraftCard(msg) {
   const meta = msg.geneMetadata;
+  // Only show draft UI if the backend confirmed a draft was actually generated.
+  // unverified_gene_draft_available is now set AFTER the draft attempt, so it
+  // is true only when a real draft object exists.
   if (!meta || meta.answer_tier !== 'tier2' || !meta.unverified_gene_draft_available) return null;
 
   const card = document.createElement('div');
   card.className = 'unverified-draft-card';
 
   if (msg.unverifiedDraftState === null) {
+    // Draft was not pre-populated in the initial response — offer manual fetch
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'unverified-draft-btn';
@@ -572,12 +584,11 @@ function buildUnverifiedDraftCard(msg) {
       details.appendChild(foot);
 
       card.appendChild(details);
-    } else {
-      const noData = document.createElement('p');
-      noData.className = 'unverified-draft-unavailable';
-      noData.textContent = 'לא הצלחנו ליצור כרגע טיוטת מידע מספיק ברורה להצגה. המידע המאושר שמופיע למעלה עדיין זמין, ולפרשנות אישית יש לפנות לצוות הגנטי.';
-      card.appendChild(noData);
     }
+    // If loaded but no draft object: show nothing. The backend sets
+    // unverified_gene_draft_available=false when draft fails, so in practice
+    // this branch (loaded + null) should not be reached in normal flow.
+    // Do NOT show any error message here — absence of draft is silent.
   }
 
   return card;

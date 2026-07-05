@@ -249,7 +249,7 @@ def _build_known_gene_answer(
             "found_in_index": True,
             "answer_tier": "tier2",
             "gene_knowledge_status": "unverified_available",
-            "unverified_gene_draft_available": True,
+            "unverified_gene_draft_available": False,   # corrected after draft attempt below
             "significance_breakdown": g_summary.get("by_significance") or {},
             "top_phenotypes": (g_summary.get("phenotypes") or [])[:6],
         }
@@ -266,7 +266,7 @@ def _build_known_gene_answer(
             "unverified_gene_draft_available": False,
         }
 
-    result = {
+    result: dict = {
         "answer": deterministic,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
@@ -277,12 +277,26 @@ def _build_known_gene_answer(
         "llm_mode": "none",
         "gene_metadata": gene_meta,
     }
-    if gene_meta.get("unverified_gene_draft_available"):
+    if gene_meta["answer_tier"] == "tier2":
+        _vus_draft_debug: dict = {}
         draft = _generate_unverified_gene_draft(
-            gene, question, clinvar_context=g_summary, use_lenient_validator=True
+            gene, question, clinvar_context=g_summary, use_lenient_validator=True,
+            _debug=_vus_draft_debug,
         )
-        if draft is not None:
+        draft_ok = draft is not None
+        gene_meta["unverified_gene_draft_available"] = draft_ok
+        gene_meta["ai_draft_attempted"] = _vus_draft_debug.get("attempted", False)
+        gene_meta["ai_draft_generated"] = draft_ok
+        if draft_ok:
+            result["llm_used"] = True
+            result["llm_mode"] = "draft_openai"
             result["unverified_gene_draft"] = draft
+        else:
+            result["ai_draft_debug"] = _vus_draft_debug or {
+                "attempted": False,
+                "generated": False,
+                "reason": "llm_not_configured_or_unknown",
+            }
     return result
 
 
@@ -1818,29 +1832,49 @@ def _build_clinvar_context_block(gene: str, clinvar_context: dict) -> str:
 def _generate_unverified_gene_draft(
     gene: str,
     question: str = "",
-    clinvar_context=None,
+    clinvar_context: "Optional[dict]" = None,
     use_lenient_validator: bool = False,
-):
+    _debug: "Optional[dict]" = None,
+) -> "Optional[dict]":
     """
     Generate an AI-written gene draft for patient opt-in display.
 
-    use_lenient_validator=True uses tolerant gene-education prompts and validator,
-    allowing biological function, disease associations, and English biomedical terms.
+    When ``clinvar_context`` is provided (Tier 2 genes with ClinVar data), the
+    draft summarises ONLY the supplied metadata — the LLM is explicitly forbidden
+    from inventing biological function, protein names, or pathways.
+
+    When ``clinvar_context`` is None (legacy / gene index unavailable), the
+    biology-from-memory prompt is used, with the same strict validation.
 
     Returns a structured dict or None (LLM unavailable / output fails validation).
-    Never raises.
+    Never raises — all failures are caught and logged.
+
+    The draft is NEVER written into approved gene cards or the KB.
+    approved=False and review_status='unreviewed' are set unconditionally.
+
+    ``_debug``: if a dict is passed, it is mutated with safe diagnostic fields
+    (no API keys, no prompts, no personal data) explaining what happened.
     """
     from datetime import datetime, timezone
+
+    def _dbg(**kw: object) -> None:
+        if isinstance(_debug, dict):
+            _debug.update(kw)
 
     try:
         client = create_llm_client()
     except ValueError as exc:
-        logger.debug("LLM not configured - skipping unverified draft for %r: %s",
-                     gene, type(exc).__name__)
+        logger.debug(
+            "LLM not configured — skipping unverified draft for %r: %s",
+            gene, type(exc).__name__,
+        )
+        _dbg(attempted=False, provider="none", reason="llm_not_configured")
         return None
 
     provider_name = type(client).__name__
+    _dbg(attempted=True, provider=provider_name)
     logger.debug("Generating unverified draft for %r via %s", gene, provider_name)
+
     use_clinvar_context = bool(clinvar_context)
 
     try:
@@ -1873,27 +1907,47 @@ def _generate_unverified_gene_draft(
         else:
             rejection = _validate_unverified_draft(text) if text else "empty"
         if rejection:
-            logger.info("Unverified gene draft for %r rejected (%s) - retrying.", gene, rejection)
+            logger.info(
+                "Unverified gene draft for %r rejected (%s) — retrying with stricter prompt.",
+                gene, rejection,
+            )
             raw2 = client.call_text_raw(user_content, system_prompt=system_prompt_2)
             text = raw2.strip()
             if use_lenient_validator:
                 rejection = _validate_gene_education_draft(text) if text else "empty"
             else:
+                # Second-pass uses relaxed validator: ClinVar allowed if otherwise safe.
                 rejection = _validate_unverified_draft_clinvar_ok(text) if text else "empty"
             if rejection:
-                logger.info("Draft for %r rejected after retry (%s) - silent fallback.",
-                            gene, rejection)
+                logger.info(
+                    "Unverified gene draft for %r rejected after retry (%s) — silent fallback.",
+                    gene, rejection,
+                )
+                _dbg(generated=False, validation_passed=False, rejection_code=rejection)
                 if not use_lenient_validator and use_clinvar_context:
-                    phenos = (clinvar_context.get("top_phenotypes")
-                              or clinvar_context.get("phenotypes") or [])
+                    phenos = (
+                        clinvar_context.get("top_phenotypes")
+                        or clinvar_context.get("phenotypes")
+                        or []
+                    )
                     normalized = _normalize_clinvar_phenotypes_for_patient(phenos, gene)
                     if normalized:
-                        return _build_deterministic_clinvar_draft(gene, normalized)
+                        logger.info(
+                            "Returning deterministic ClinVar draft for %r (%d contexts).",
+                            gene, len(normalized),
+                        )
+                        det = _build_deterministic_clinvar_draft(gene, normalized)
+                        _dbg(generated=True, validation_passed=True, rejection_code=None,
+                             fallback="deterministic_clinvar")
+                        return det
                 return None
 
-        model_name = (getattr(client, "_model", None)
-                      or os.environ.get("LOCAL_LLM_MODEL", None)
-                      or provider_name)
+        model_name = (
+            getattr(client, "_model", None)
+            or os.environ.get("LOCAL_LLM_MODEL", None)
+            or provider_name
+        )
+        _dbg(generated=True, validation_passed=True, model=model_name)
         result = {
             "visible": True,
             "status": "ai_generated_unreviewed",
@@ -1913,14 +1967,14 @@ def _generate_unverified_gene_draft(
         return result
 
     except LLMClientError as exc:
-        logger.info("LLM unavailable for unverified draft for %r (%s).",
-                    gene, type(exc).__name__)
+        logger.info("LLM unavailable for unverified draft for %r (%s).", gene, type(exc).__name__)
+        _dbg(generated=False, validation_passed=False, rejection_code="llm_client_error",
+             error_type=type(exc).__name__)
         return None
     except Exception as exc:
-        logger.warning("Unexpected error generating unverified draft for %r (%s).",
-                       gene, type(exc).__name__)
+        logger.warning("Unexpected error generating unverified draft for %r (%s).", gene, type(exc).__name__)
+        _dbg(generated=False, rejection_code="unexpected_error", error_type=type(exc).__name__)
         return None
-
 
 
 _CJK_RE = re.compile(r"[一-鿿぀-ゟ゠-ヿ]")
@@ -2584,46 +2638,62 @@ def _build_gene_clinvar_answer(
             },
         }
 
-    # Tier 2: in ClinVar index but no approved Hebrew card
-    correction_prefix = (
+    # Tier 2: no approved gene card or knowledge base record, but gene is in ClinVar index.
+    # Main answer: short patient-friendly message ONLY — no raw ClinVar dump.
+    # ClinVar details (significance_breakdown, top_phenotypes) remain in
+    # gene_metadata for the collapsed technical UI card.
+    _correction_prefix_t2 = (
         f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
         if corrected_from else ""
     )
     tier2_answer = (
-        correction_prefix
-        + f"מצאתי את הגן {gene} במאגר ClinVar, אך אין עדיין סיכום ביולוגי מאושר בעברית עבורו.\n\n"
+        _correction_prefix_t2 +
+        f"מצאתי את הגן {gene} במאגר ClinVar, אך אין עדיין סיכום ביולוגי מאושר בעברית עבורו.\n\n"
         "המידע כללי בלבד ואינו מפרש תוצאה אישית. "
         "לפרשנות אישית יש לפנות לצוות הגנטי."
     )
     suggested = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
+    _draft_debug: dict = {}
     unverified_draft = _generate_unverified_gene_draft(
-        gene, question, clinvar_context=summary, use_lenient_validator=True
+        gene, question, clinvar_context=summary, use_lenient_validator=True,
+        _debug=_draft_debug,
     )
-    result = {
+    draft_available = unverified_draft is not None
+    result: dict = {
         "answer": tier2_answer,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
         "matched_topic": "gene_clinvar_summary",
         "suggested_questions": suggested,
-        "llm_used": False,
+        "llm_used": draft_available,
         "fallback_used": True,
-        "llm_mode": "none",
+        "llm_mode": "draft_openai" if draft_available else "none",
         "gene_metadata": {
             "gene_symbol": gene,
             "data_source": "ClinVar (NCBI) via local gene index",
-            "llm_used": False,
+            "llm_used": draft_available,
             "fallback_used": True,
             "total_variants": summary.get("total_variants"),
             "found_in_index": True,
             "answer_tier": "tier2",
             "gene_knowledge_status": "unverified_available",
-            "unverified_gene_draft_available": True,
+            "unverified_gene_draft_available": draft_available,
+            "ai_draft_attempted": _draft_debug.get("attempted", False),
+            "ai_draft_generated": draft_available,
             "significance_breakdown": summary.get("by_significance") or {},
             "top_phenotypes": (summary.get("phenotypes") or [])[:6],
         },
     }
-    if unverified_draft is not None:
+    if draft_available:
         result["unverified_gene_draft"] = unverified_draft
+    else:
+        # Always include debug info so monitoring can see why no draft was produced.
+        # Fall back to a minimal dict if the function returned before populating _debug.
+        result["ai_draft_debug"] = _draft_debug or {
+            "attempted": False,
+            "generated": False,
+            "reason": "llm_not_configured_or_unknown",
+        }
     return result
 
 

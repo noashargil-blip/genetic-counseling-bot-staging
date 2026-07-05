@@ -93,7 +93,7 @@ if _BASIC_AUTH_ENABLED:
             if not auth.startswith("Basic "):
                 return Response(
                     status_code=401,
-                    headers={"WWW-Authenticate": 'Basic realm="genetic-bot-staging"'},
+                    headers={"WWW-Authenticate": f'Basic realm="{_AUTH_REALM}"'},
                     content="Authentication required.",
                 )
             try:
@@ -250,6 +250,14 @@ class CounselingAskResponse(BaseModel):
             "This field is absent (not null) when no draft was generated."
         ),
     )
+    ai_draft_debug: Optional[dict] = Field(
+        None,
+        description=(
+            "Present only when a tier2 gene draft was attempted but failed. "
+            "Contains safe diagnostic keys: attempted, provider, generated, "
+            "validation_passed, rejection_code. Never contains API keys or prompts."
+        ),
+    )
 
     @model_serializer
     def _serialize(self) -> dict:
@@ -282,6 +290,8 @@ class CounselingAskResponse(BaseModel):
             out["gene_metadata"] = self.gene_metadata
         if self.unverified_gene_draft is not None:
             out["unverified_gene_draft"] = self.unverified_gene_draft
+        if self.ai_draft_debug is not None:
+            out["ai_draft_debug"] = self.ai_draft_debug
         return out
 
 

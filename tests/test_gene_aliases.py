@@ -128,12 +128,17 @@ class TestVusPoleRouting:
         )
 
     def test_vus_pole_tier2_exposes_draft_flag(self, client):
-        """If POLE is Tier-2 (in ClinVar index, no approved card), draft must be available."""
+        """Tier-2 answers must expose unverified_gene_draft_available; its value must match draft presence."""
         data = _ask(client, "יש לי VUS בגן Pol-E")
         meta = data.get("gene_metadata")
         if meta and meta.get("answer_tier") == "tier2":
-            assert meta.get("unverified_gene_draft_available") is True, (
-                "Tier-2 VUS+gene answer must expose unverified_gene_draft_available=True"
+            assert "unverified_gene_draft_available" in meta, (
+                "Tier-2 answer must include unverified_gene_draft_available in gene_metadata"
+            )
+            flag = meta.get("unverified_gene_draft_available")
+            draft_present = "unverified_gene_draft" in data
+            assert flag == draft_present, (
+                f"unverified_gene_draft_available={flag} must match draft_present={draft_present}"
             )
 
     def test_vus_pole_not_carrier_topic(self, client):
@@ -317,7 +322,12 @@ class TestVusTier2NoClinvarDump:
         assert meta.get("answer_tier") in ("tier2", "tier1")
         if meta.get("answer_tier") == "tier2":
             assert "total_variants" in meta, "total_variants must still be in gene_metadata"
-            assert meta.get("unverified_gene_draft_available") is True
+            assert "unverified_gene_draft_available" in meta, (
+                "unverified_gene_draft_available field must be present in tier2 gene_metadata"
+            )
+            flag = meta.get("unverified_gene_draft_available")
+            draft_present = "unverified_gene_draft" in data
+            assert flag == draft_present
 
     def test_answer_mentions_vus_explanation(self, client):
         data = self._pole_answer(client)
