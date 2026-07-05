@@ -83,7 +83,7 @@ _BASIC_AUTH_ENABLED = os.environ.get("BASIC_AUTH_ENABLED", "").strip().lower() i
 if _BASIC_AUTH_ENABLED:
     _AUTH_USERNAME = os.environ.get("BASIC_AUTH_USERNAME", "staging")
     _AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD", "")
-    _AUTH_REALM = "Genetic Counseling Bot — Staging"
+    _AUTH_REALM = "Genetic Counseling Bot - Staging"  # ASCII-only; HTTP headers require latin-1
 
     class _BasicAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: StarletteRequest, call_next):

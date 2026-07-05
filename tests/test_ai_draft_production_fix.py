@@ -218,15 +218,18 @@ class TestDraftWithMockedLLM:
         if draft:
             assert draft.get("warning_he"), "Draft should have warning_he"
 
-    def test_cftr_no_ai_draft_debug_when_draft_succeeds(self, monkeypatch):
+    def test_cftr_ai_draft_debug_present_when_draft_succeeds(self, monkeypatch):
         mock_client = MagicMock()
         mock_client.call_text_raw.return_value = self.SAFE_TEXT
         monkeypatch.setattr("app.counseling_engine.create_llm_client", lambda: mock_client)
         data = client.post("/ask", json={"question": "CFTR"}).json()
         if "unverified_gene_draft" in data:
-            assert "ai_draft_debug" not in data, (
-                "ai_draft_debug should not appear when draft succeeded"
+            assert "ai_draft_debug" in data, (
+                "ai_draft_debug should be present for monitoring even when draft succeeded"
             )
+            debug = data["ai_draft_debug"]
+            assert debug.get("generated") is True
+            assert debug.get("shown") is True
 
     def test_llm_mode_reflects_draft_usage(self, monkeypatch):
         mock_client = MagicMock()

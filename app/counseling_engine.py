@@ -45,6 +45,7 @@ ClinVar retriever, or used to resolve follow-up context.
 import logging
 import os
 import re
+import traceback as _traceback
 from typing import NamedTuple, Optional
 
 from app import kb, retriever, safety, gene_index, gene_cards, gene_knowledge
@@ -291,12 +292,20 @@ def _build_known_gene_answer(
             result["llm_used"] = True
             result["llm_mode"] = "draft_openai"
             result["unverified_gene_draft"] = draft
+            result["ai_draft_debug"] = {
+                "attempted": True,
+                "generated": True,
+                "shown": True,
+                "provider": _vus_draft_debug.get("provider", "unknown"),
+            }
         else:
             result["ai_draft_debug"] = _vus_draft_debug or {
                 "attempted": False,
                 "generated": False,
+                "shown": False,
                 "reason": "llm_not_configured_or_unknown",
             }
+            result["ai_draft_debug"].setdefault("shown", False)
     return result
 
 
@@ -1778,6 +1787,41 @@ def _build_deterministic_clinvar_draft(
     }
 
 
+# ---------------------------------------------------------------------------
+# Staging-only AI draft debug mode (temporary; NOT for customer-facing deploy)
+# ---------------------------------------------------------------------------
+
+# Genes whose rejected AI drafts may be exposed in debug metadata only when
+# APP_ENV=staging/development and AI_DRAFT_DEBUG_SHOW_REJECTED=true.
+_DEBUG_SAFE_GENES: frozenset = frozenset({"APOE", "CFTR", "TLR3", "ABO", "PTEN"})
+
+# Phrases that mark a question as high-stakes; raw AI text must never be
+# exposed even in debug mode when these appear.
+_HIGH_STAKES_DEBUG_PHRASES: tuple = (
+    "סרטן", "cancer", "סיכון", "risk",
+    "ניתוח", "surgery", "טיפול", "treatment",
+    "תרופה", "medication",
+    "abortion", "האם יש לי",
+    "האם אני חולה",
+    "diagnos", "האם עלי",
+    "האם כדאי", "האם צריך",
+)
+
+
+def _ai_draft_debug_mode_active() -> bool:
+    """True only in staging/development with AI_DRAFT_DEBUG_SHOW_REJECTED=true."""
+    env = os.environ.get("APP_ENV", "production").strip().lower()
+    if env not in ("staging", "development"):
+        return False
+    flag = os.environ.get("AI_DRAFT_DEBUG_SHOW_REJECTED", "").strip().lower()
+    return flag in ("1", "true", "yes")
+
+
+def _question_has_high_stakes_phrases(question: str) -> bool:
+    q = question.lower()
+    return any(phrase.lower() in q for phrase in _HIGH_STAKES_DEBUG_PHRASES)
+
+
 def _build_clinvar_context_block(gene: str, clinvar_context: dict) -> str:
     """
     Build a compact metadata block to pass as context to the ClinVar-based draft LLM.
@@ -1865,7 +1909,7 @@ def _generate_unverified_gene_draft(
         client = create_llm_client()
     except ValueError as exc:
         logger.debug(
-            "LLM not configured — skipping unverified draft for %r: %s",
+            "LLM not configured - skipping unverified draft for %r: %s",
             gene, type(exc).__name__,
         )
         _dbg(attempted=False, provider="none", reason="llm_not_configured")
@@ -1907,10 +1951,13 @@ def _generate_unverified_gene_draft(
         else:
             rejection = _validate_unverified_draft(text) if text else "empty"
         if rejection:
-            logger.info(
-                "Unverified gene draft for %r rejected (%s) — retrying with stricter prompt.",
-                gene, rejection,
-            )
+            try:
+                logger.info(
+                    "Unverified gene draft for %r rejected (%s) - retrying.",
+                    gene, str(rejection)[:120],
+                )
+            except Exception:
+                pass
             raw2 = client.call_text_raw(user_content, system_prompt=system_prompt_2)
             text = raw2.strip()
             if use_lenient_validator:
@@ -1920,10 +1967,26 @@ def _generate_unverified_gene_draft(
                 rejection = _validate_unverified_draft_clinvar_ok(text) if text else "empty"
             if rejection:
                 logger.info(
-                    "Unverified gene draft for %r rejected after retry (%s) — silent fallback.",
+                    "Unverified gene draft for %r rejected after retry (%s) - silent fallback.",
                     gene, rejection,
                 )
                 _dbg(generated=False, validation_passed=False, rejection_code=rejection)
+                # Staging debug mode: expose raw rejected text for safe genes only.
+                if (
+                    text
+                    and _ai_draft_debug_mode_active()
+                    and gene.upper() in _DEBUG_SAFE_GENES
+                    and not _question_has_high_stakes_phrases(question or "")
+                ):
+                    _dbg(
+                        raw_rejected_text_he=text[:500],
+                        raw_rejected_status="ai_generated_rejected_debug_only",
+                        raw_rejected_warning=(
+                            "DEBUG ONLY - this draft failed validation "
+                            "and must not be shown to real users."
+                        ),
+                        raw_rejection_reason=str(rejection)[:120],
+                    )
                 if not use_lenient_validator and use_clinvar_context:
                     phenos = (
                         clinvar_context.get("top_phenotypes")
@@ -1972,8 +2035,25 @@ def _generate_unverified_gene_draft(
              error_type=type(exc).__name__)
         return None
     except Exception as exc:
-        logger.warning("Unexpected error generating unverified draft for %r (%s).", gene, type(exc).__name__)
-        _dbg(generated=False, rejection_code="unexpected_error", error_type=type(exc).__name__)
+        tb_frames = _traceback.extract_tb(exc.__traceback__)
+        last_frame = tb_frames[-1] if tb_frames else None
+        err_func = getattr(last_frame, "name", "unknown") if last_frame else "unknown"
+        err_line = getattr(last_frame, "lineno", 0) if last_frame else 0
+        err_type = type(exc).__name__
+        try:
+            logger.warning(
+                "Unexpected error generating draft for %r: %s in %s (line %d)",
+                gene, err_type, err_func, err_line,
+            )
+        except Exception:
+            pass  # never let logging crash the draft function
+        _dbg(
+            generated=False,
+            rejection_code="unexpected_error",
+            error_type=err_type,
+            error_func=err_func,
+            error_line=err_line,
+        )
         return None
 
 
@@ -2686,14 +2766,20 @@ def _build_gene_clinvar_answer(
     }
     if draft_available:
         result["unverified_gene_draft"] = unverified_draft
+        result["ai_draft_debug"] = {
+            "attempted": True,
+            "generated": True,
+            "shown": True,
+            "provider": _draft_debug.get("provider", "unknown"),
+        }
     else:
-        # Always include debug info so monitoring can see why no draft was produced.
-        # Fall back to a minimal dict if the function returned before populating _debug.
         result["ai_draft_debug"] = _draft_debug or {
             "attempted": False,
             "generated": False,
+            "shown": False,
             "reason": "llm_not_configured_or_unknown",
         }
+        result["ai_draft_debug"].setdefault("shown", False)
     return result
 
 
