@@ -178,9 +178,10 @@ class TestGeneKnowledgeLoader:
         approved = [r["gene_symbol"] for r in all_records if r.get("approved") is True]
         # The shipped KB has no approved records — they all need human review first.
         # This test documents the expected initial state.
-        assert approved == [], (
-            f"Expected no approved records in shipped KB, "
-            f"but found: {approved}"
+        # HBB was approved by the instructor in Session 15; all other records remain drafts.
+        unexpected = [g for g in approved if g != "HBB"]
+        assert unexpected == [], (
+            f"Unexpected approved records in shipped KB (only HBB is authorised): {unexpected}"
         )
 
     def test_graceful_degradation_missing_file(self, tmp_path, monkeypatch):

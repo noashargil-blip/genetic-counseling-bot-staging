@@ -69,6 +69,8 @@ _GENE_PATTERNS = [
     ("APC",    re.compile(r"\bapc\b",             re.IGNORECASE)),
     ("TP53",   re.compile(r"\btp53\b",            re.IGNORECASE)),
     ("SHANK3", re.compile(r"\bshank[-\s]?3\b",   re.IGNORECASE)),
+    # HBB: handles plain "HBB" and Hebrew-prefix forms "בHBB", "ב-HBB" (no word boundary at Hebrew-Latin)
+    ("HBB",    re.compile(r"(?<![A-Za-z])hbb(?![A-Za-z])", re.IGNORECASE)),
     # POLE: also recognises alias forms Pol-E / Pol E / Pole-E / Pole E / פול אי
     ("POLE",   re.compile(
         r"\bpole\b"           # POLE, pole
@@ -173,7 +175,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         # Tier 1a: Brief opening + full curated gene-cards explanation
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
-            "VUS הוא ממצא שמשמעותו עדיין לא ידועה — "
+            "VUS הוא ממצא שמשמעותו עדיין לא ידועה — הוא אינו שקול לממצא פתוגני. "
             "הסיווג עשוי להשתנות בעתיד ככל שמצטברות ראיות מדעיות חדשות."
         )
         parts = [opening, f"לגבי הגן {gene}:\n{curated}"]
@@ -181,7 +183,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         # Tier 1b: Gene Knowledge Base — approved record with sourced Hebrew text
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
-            "VUS הוא ממצא שמשמעותו עדיין לא ידועה — "
+            "VUS הוא ממצא שמשמעותו עדיין לא ידועה — הוא אינו שקול לממצא פתוגני. "
             "הסיווג עשוי להשתנות בעתיד ככל שמצטברות ראיות מדעיות חדשות."
         )
         parts = [opening, f"לגבי הגן {gene}:\n{gk_summary}"]
@@ -845,7 +847,9 @@ def _build_variant_evidence_answer(question: str) -> dict:
 # consumed as a vague follow-up phrase.
 
 # Regex to find candidate gene-symbol tokens (uppercase, 2–10 chars).
-_GENE_SYMBOL_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})\b")
+# Uses lookahead/lookbehind on [A-Za-z] instead of \b so genes written with
+# a Hebrew prefix directly attached ("בHBB", "ב-HBB") are still detected.
+_GENE_SYMBOL_CANDIDATE_RE = re.compile(r"(?<![A-Za-z])([A-Z][A-Z0-9]{1,9})(?![a-zA-Z])")
 
 # Well-known abbreviations that are NOT gene symbols — skip index lookup for these.
 _NON_GENE_TOKENS: frozenset[str] = frozenset({
@@ -899,12 +903,54 @@ _GENE_QUESTION_PHRASES: frozenset[str] = frozenset([
     "מה הסכנה",
     "מה הסיכון של הגן",
     "מה קורה בגן",
+    # "What is THE mutation of gene X" — implies one mutation; triggers routing + explanation note
+    "מה המוטציה",
+    "המוטציה של",
+    "המוטציה ב",
+    "מה הוריאנט של",
+    "מה הווריאנט של",
+    "איזה מוטציה",
+    "איזה וריאנט",
+    "מוטציה של הגן",
+    "וריאנט של הגן",
 ])
 
 # Hebrew safety note appended to gene-level answers.
 _GENE_SUMMARY_SAFETY_NOTE_HE = (
     "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
 )
+
+# Phrases that signal the user is asking about "the mutation" (singular) of a gene.
+# These trigger a preamble explaining that a gene can have many different variants.
+_MUTATION_SPECIFIC_PHRASES: frozenset[str] = frozenset([
+    "מה המוטציה",
+    "המוטציה של",
+    "המוטציה ב",
+    "מה הוריאנט של",
+    "מה הווריאנט של",
+    "איזה מוטציה",
+    "איזה וריאנט",
+    "מוטציה של הגן",
+    "וריאנט של הגן",
+    "what mutation",
+    "what variant",
+    "mutation of",
+])
+
+# Preamble prepended when user asks about "the mutation of gene X" —
+# corrects the misconception that a gene has one single mutation.
+_MUTATION_GENE_PREAMBLE_HE = (
+    "גן {gene} יכול לכלול מגוון רחב של וריאנטים ושינויים גנטיים שונים — "
+    "אין וריאנט יחידי שמייצג את הגן. "
+    "המשמעות של כל ממצא תלויה בווריאנט המדויק שנמצא בבדיקה הגנטית, "
+    "בסיווגו ובהקשר הקליני.\n\n"
+)
+
+
+def _is_mutation_specific_question(text: str) -> bool:
+    """Return True when the user asks 'what is THE mutation of gene X' (singular)."""
+    lower = text.strip().lower()
+    return any(phrase in lower for phrase in _MUTATION_SPECIFIC_PHRASES)
 
 # ---------------------------------------------------------------------------
 # ClinVar condition label hygiene
@@ -2257,7 +2303,8 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         if card_summary:
             # Tier 1a (gene_cards card only — no ClinVar stats available).
             safety_note = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
-            det = card_summary + safety_note
+            preamble_1a = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
+            det = preamble_1a + card_summary + safety_note
             return {
                 "answer": det,
                 "safety_level": "general_information",
@@ -2284,8 +2331,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         gk_vus = gene_knowledge.get_gene_vus_note(gene)
         if gk_patient:
             safety_note = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
-            parts_1b = [gk_patient]
-            if gk_vus:
+            preamble_1b = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
+            parts_1b = [preamble_1b + gk_patient]
+            if gk_vus and _mentions_vus(question):  # VUS note only when question asks about VUS
                 parts_1b.append(gk_vus)
             det = "\n\n".join(parts_1b) + safety_note
             suggested_1b = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
@@ -2343,7 +2391,8 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     if curated:
         # Tier 1a: approved gene card — curated patient education.
         # ClinVar stats go to gene_metadata only; main answer gets a brief reference note.
-        det = curated
+        preamble = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
+        det = preamble + curated
         if summary:
             det += "\n\nקיימים נתונים טכניים נוספים על הגן בכרטיס הגנטי המורחב."
         det += "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
@@ -2377,8 +2426,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     gk_vus_ci = gene_knowledge.get_gene_vus_note(gene)
     if gk_patient_ci:
         safety_note_ci = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
-        parts_ci = [gk_patient_ci]
-        if gk_vus_ci:
+        preamble_ci = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
+        parts_ci = [preamble_ci + gk_patient_ci]
+        if gk_vus_ci and _mentions_vus(question):  # VUS note only when question asks about VUS
             parts_ci.append(gk_vus_ci)
         det_ci = "\n\n".join(parts_ci) + safety_note_ci
         suggested_ci = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
@@ -2459,7 +2509,11 @@ def _build_gene_education_fallback(gene: str) -> dict:
 
     Safe invariants: no personal interpretation, no diagnosis, no treatment advice.
     """
-    body = gene_cards.get_approved_summary(gene) or _GENE_EDUCATION_FALLBACK_HE.format(gene=gene)
+    body = (
+        gene_cards.get_approved_summary(gene)
+        or gene_knowledge.get_gene_patient_summary(gene)
+        or _GENE_EDUCATION_FALLBACK_HE.format(gene=gene)
+    )
     safety_note = (
         "\n\nחשוב לדעת: מידע זה כללי בלבד ואינו פרשנות של הממצא האישי שלך. "
         "לפרשנות מדויקת — יש לפנות לצוות הגנטי שטיפל בך."

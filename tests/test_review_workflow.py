@@ -1033,4 +1033,6 @@ class TestSeedScript:
     def test_list_approved_genes_unchanged_after_seeding(self):
         from app import gene_knowledge as gk
         approved = gk.list_approved_genes()
-        assert approved == [], f"Expected [] but got {approved}"
+        # HBB was approved by the instructor in Session 15; all other records remain drafts.
+        unexpected = [g for g in approved if g != "HBB"]
+        assert unexpected == [], f"Unexpected approved genes after seeding: {unexpected}"

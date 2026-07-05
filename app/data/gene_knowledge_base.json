@@ -364,19 +364,19 @@
     "gene_symbol": "HBB",
     "gene_name": "Hemoglobin Subunit Beta",
     "clinical_area": "hematology",
-    "patient_summary_he": "HBB הוא גן שמקודד לשרשרת בטא של ההמוגלובין, החלבון הנושא חמצן בכדוריות הדם האדומות. שינויים פתוגניים בשני עותקי הגן גורמים לבטא-תלסמיה (beta-thalassemia) או למחלת תאי מגל (sickle cell disease). נשאים (עם שינוי בעותק אחד בלבד) בדרך כלל בריאים אך עלולים להעביר את הגן לצאצאיהם.",
+    "patient_summary_he": "HBB הוא גן שמכיל הוראות לייצור beta-globin, אחד המרכיבים של המוגלובין — החלבון שנמצא בכדוריות דם אדומות ותפקידו לשאת חמצן בגוף. שינויים מסוימים ב-HBB יכולים להיות קשורים להמוגלובינופתיות, למשל בטא-תלסמיה או מחלת חרמש, אך המשמעות של כל ממצא תלויה בווריאנט המדויק, בסיווג שלו ובדוח הגנטי. חשוב להבדיל בין מידע כללי על הגן לבין פירוש של שינוי אישי שנמצא בבדיקה.",
     "vus_note_type": "hematology",
     "vus_note_he": "VUS בגן הקשור למחלה תורשתית אינו מוכיח אבחנה ואינו מספיק בפני עצמו לקבוע נשאות משמעותית או סיכון אישי. הפירוש תלוי בווריאנט המדויק, בתוצאות נוספות ובהקשר המשפחתי.",
     "source_1_name": "MedlinePlus Genetics",
     "source_1_url_or_id": "https://medlineplus.gov/genetics/gene/hbb/",
     "source_2_name": "NCBI Gene",
     "source_2_url_or_id": "https://www.ncbi.nlm.nih.gov/gene/3043",
-    "source_status": "needs_review",
-    "review_status": "draft",
-    "approved": false,
-    "reviewed_by": null,
-    "reviewed_at": null,
-    "reviewer_notes": null,
-    "last_updated": "2026-06-30"
+    "source_status": "reviewed",
+    "review_status": "approved",
+    "approved": true,
+    "reviewed_by": "instructor",
+    "reviewed_at": "2026-07-04",
+    "reviewer_notes": "Approved patient-friendly summary provided by instructor.",
+    "last_updated": "2026-07-04"
   }
 ]

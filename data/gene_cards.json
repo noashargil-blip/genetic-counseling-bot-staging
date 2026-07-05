@@ -1,0 +1,81 @@
+[
+  {
+    "gene_symbol": "APC",
+    "summary_he": "APC הוא גן שקשור לבקרה על גדילה וחלוקה של תאים. שינויים מסוימים ב-APC יכולים להיות קשורים למצבים תורשתיים שבהם יש נטייה לריבוי פוליפים במעי, כמו Familial Adenomatous Polyposis. חשוב להבדיל בין העובדה שגן מסוים מוכר כקשור למצבים רפואיים מסוימים, לבין המשמעות של וריאנט אישי שנמצא אצלך. המשמעות האישית תלויה בדוח הבדיקה, בסיפור המשפחי ובהערכת הצוות הגנטי.",
+    "approved": true,
+    "reviewed_by": "genetic-counseling-team",
+    "last_reviewed": "2026-07-04",
+    "sources": [
+      "ClinVar",
+      "OMIM",
+      "GeneReviews"
+    ],
+    "notes": "Content covers FAP association without personal medical advice. VUS explicitly distinguished from pathogenic."
+  },
+  {
+    "gene_symbol": "BRCA1",
+    "summary_he": "BRCA1 הוא גן שקשור לתיקון נזקים ב-DNA. שינויים פתוגניים מסוימים ב-BRCA1 קשורים לנטייה מוגברת לסוגים מסוימים של סרטן. חשוב להבדיל בין הגן עצמו לבין המשמעות של וריאנט ספציפי שנמצא בבדיקה. המשמעות של הממצא הספציפי נקבעת על ידי הצוות הגנטי בהתאם לדוח ולהיסטוריה המשפחתית.",
+    "approved": true,
+    "reviewed_by": "genetic-counseling-team",
+    "last_reviewed": "2026-07-04",
+    "sources": [
+      "ClinVar",
+      "OMIM",
+      "GeneReviews",
+      "ACMG"
+    ],
+    "notes": "DNA repair role explained. No surgery/surveillance recommendations. VUS guidance moved to VUS-specific answer path."
+  },
+  {
+    "gene_symbol": "BRCA2",
+    "summary_he": "BRCA2 הוא גן הקשור לתיקון נזקים ב-DNA, ומכיל הוראות לייצור חלבון המסייע בתיקון שבריות בשרשראות ה-DNA. שינויים פתוגניים ב-BRCA2 קשורים לנטייה מוגברת לסוגים מסוימים של סרטן. המשמעות של כל ממצא נקבעת על ידי הצוות הגנטי.",
+    "approved": true,
+    "reviewed_by": "genetic-counseling-team",
+    "last_reviewed": "2026-07-04",
+    "sources": [
+      "ClinVar",
+      "OMIM",
+      "GeneReviews",
+      "ACMG"
+    ],
+    "notes": "DNA repair role. No personal risk estimates. VUS guidance moved to VUS-specific answer path."
+  },
+  {
+    "gene_symbol": "NF1",
+    "summary_he": "NF1 הוא גן שקשור לבקרה על גדילה תאית. שינויים פתוגניים ב-NF1 קשורים למחלה תורשתית הנקראת Neurofibromatosis type 1. המשמעות של הממצא הספציפי נקבעת על ידי הצוות הגנטי.",
+    "approved": true,
+    "reviewed_by": "genetic-counseling-team",
+    "last_reviewed": "2026-07-04",
+    "sources": [
+      "ClinVar",
+      "OMIM",
+      "GeneReviews"
+    ],
+    "notes": "Cell-growth control role. Neurofibromatosis association. VUS guidance moved to VUS-specific answer path."
+  },
+  {
+    "gene_symbol": "TP53",
+    "summary_he": "TP53 הוא גן המכיל הוראות לייצור חלבון הנקרא p53, הממלא תפקיד מרכזי בפיקוח על גדילה תאית ובמניעת שינויים לא תקינים ב-DNA. שינויים פתוגניים מסוימים ב-TP53 קשורים לסינדרומים תורשתיים נדירים. המשמעות של הממצא הספציפי נקבעת על ידי הצוות הגנטי.",
+    "approved": true,
+    "reviewed_by": "genetic-counseling-team",
+    "last_reviewed": "2026-07-04",
+    "sources": [
+      "ClinVar",
+      "OMIM",
+      "GeneReviews"
+    ],
+    "notes": "p53 tumour suppressor role. Li-Fraumeni mentioned implicitly. VUS guidance moved to VUS-specific answer path."
+  },
+  {
+    "gene_symbol": "SHANK3",
+    "summary_he": "SHANK3 הוא גן הקשור לתפקוד חיבורים בין תאי עצב במוח. שינויים בגן זה קשורים לעיתים למצבים המשפיעים על ההתפתחות הנוירולוגית. המשמעות של ממצא ספציפי ב-SHANK3 תלויה בסוג הממצא ובהקשר הקליני, ונקבעת על ידי הצוות הגנטי.",
+    "approved": true,
+    "reviewed_by": "genetic-counseling-team",
+    "last_reviewed": "2026-06-28",
+    "sources": [
+      "ClinVar",
+      "OMIM"
+    ],
+    "notes": "Synaptic scaffolding role. Neurological development association. No personal risk."
+  }
+]
