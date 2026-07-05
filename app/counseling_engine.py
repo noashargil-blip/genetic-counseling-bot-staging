@@ -154,25 +154,19 @@ def _detect_known_gene(text: str) -> Optional[str]:
     return None
 
 
-def _build_known_gene_answer(gene: str, question: str = "", include_unverified_gene_draft: bool = False) -> dict:
+def _build_known_gene_answer(
+    gene: str, question: str = "", include_unverified_gene_draft: bool = False
+) -> dict:
     """
     Build a warm, enriched answer for "I got a VUS in gene X" questions.
-    Combines:
-      1. Warm Hebrew opening + VUS explanation
-      2. Gene education — curated text from _GENE_EDUCATION_HE when available,
-         otherwise VUS-practical paragraph
-      3. ClinVar aggregate stats when the gene is in the local index
-      4. Safety note — general information only, not personal interpretation
-
-    Always general_information.  Safety.py already filtered out personal
-    interpretation requests and identifying information before this is called.
+    include_unverified_gene_draft is accepted for API compatibility but draft is
+    always attempted for Tier 2 genes regardless of this flag.
     """
     curated = gene_cards.get_approved_summary(gene)
-    gk_summary = gene_knowledge.get_gene_patient_summary(gene)   # Tier 1b
-    gk_vus_note = gene_knowledge.get_gene_vus_note(gene)          # Tier 1b
+    gk_summary = gene_knowledge.get_gene_patient_summary(gene)
+    gk_vus_note = gene_knowledge.get_gene_vus_note(gene)
 
     if curated:
-        # Tier 1a: Brief opening + full curated gene-cards explanation
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
             "VUS הוא ממצא שמשמעותו עדיין לא ידועה — הוא אינו שקול לממצא פתוגני. "
@@ -180,7 +174,6 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         )
         parts = [opening, f"לגבי הגן {gene}:\n{curated}"]
     elif gk_summary:
-        # Tier 1b: Gene Knowledge Base — approved record with sourced Hebrew text
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
             "VUS הוא ממצא שמשמעותו עדיין לא ידועה — הוא אינו שקול לממצא פתוגני. "
@@ -190,7 +183,6 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         if gk_vus_note:
             parts.append(gk_vus_note)
     else:
-        # Fuller VUS explanation when no curated gene education exists
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
             "VUS — Variant of Uncertain Significance — הוא ממצא שמשמעותו עדיין לא ידועה. "
@@ -203,43 +195,30 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             "ככל שמצטברות ראיות מדעיות חדשות."
         )
         parts = [opening, vus_practical]
-        # Tier-2 gene (in ClinVar index, no approved Hebrew card): add a
-        # patient-friendly note instead of a raw ClinVar dump.
-        # Stats stay in gene_metadata for the collapsed technical UI card.
         if gene_index._GENE_INDEX_AVAILABLE and gene_index.get_gene_summary(gene) is not None:
             gene_note = (
-                f"לגבי הגן {gene}: מצאתי אותו במאגר, אבל אין לי עדיין "
-                "סיכום ביולוגי מאושר בעברית עבורו. אפשר לבחור לראות טיוטת מידע "
-                "כללית שנוצרה על ידי AI, אך היא לא עברה בדיקה מקצועית ועלולה "
-                "להיות שגויה או חלקית."
+                f"לגבי הגן {gene}: נמצא במאגר ClinVar, אך אין עדיין סיכום ביולוגי "
+                "מאושר בעברית עבורו."
             )
             parts.append(gene_note)
 
-    # ClinVar stats go to gene_metadata only — not the main answer text.
-    # Stats in the answer text are replaced by a brief reference note for Tier-1a.
-    g_summary = gene_index.get_gene_summary(gene) if gene_index._GENE_INDEX_AVAILABLE else None  # noqa: F821
+    g_summary = gene_index.get_gene_summary(gene) if gene_index._GENE_INDEX_AVAILABLE else None
     if curated and g_summary:
         parts.append("קיימים נתונים טכניים נוספים על הגן בכרטיס הגנטי המורחב.")
-
-    # Short general disclaimer — no automatic team referral for routine VUS education
     parts.append("המידע כללי ואינו מחליף ייעוץ רפואי אישי.")
 
     entry = kb.get_by_id("vus_known_gene")
-    suggested = list(entry.get("suggested_questions", [])) if entry else list(_GENE_SUGGESTED_QUESTIONS)  # noqa: F821
-
+    suggested = list(entry.get("suggested_questions", [])) if entry else list(_GENE_SUGGESTED_QUESTIONS)
     deterministic = "\n\n".join(parts)
-    # Curated VUS+gene answers are always deterministic.
 
-    # Build gene_metadata so the UI can show the tier-aware cards
-    # (ClinVar technical card and unverified-draft opt-in card).
-    has_card = bool(gene_cards.get_approved_summary(gene))  # noqa: F821
+    has_card = bool(gene_cards.get_approved_summary(gene))
     has_gk = gene_knowledge.has_approved_gene_knowledge(gene)
     if has_card:
-        gene_meta: dict = {
+        gene_meta = {
             "gene_symbol": gene,
             "data_source": "Curated educational content + ClinVar" if g_summary else "Curated educational content",
             "llm_used": False,
-            "fallback_used": not False,
+            "fallback_used": True,
             "total_variants": g_summary.get("total_variants") if g_summary else None,
             "found_in_index": g_summary is not None,
             "answer_tier": "tier1",
@@ -253,7 +232,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             "gene_symbol": gene,
             "data_source": "Gene Knowledge Base",
             "llm_used": False,
-            "fallback_used": not False,
+            "fallback_used": True,
             "total_variants": g_summary.get("total_variants") if g_summary else None,
             "found_in_index": g_summary is not None,
             "answer_tier": "tier1b",
@@ -279,7 +258,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             "gene_symbol": gene,
             "data_source": "ClinVar (NCBI) via local gene index",
             "llm_used": False,
-            "fallback_used": not False,
+            "fallback_used": True,
             "total_variants": None,
             "found_in_index": False,
             "answer_tier": "tier3",
@@ -287,7 +266,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             "unverified_gene_draft_available": False,
         }
 
-    result: dict = {
+    result = {
         "answer": deterministic,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
@@ -298,11 +277,15 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         "llm_mode": "none",
         "gene_metadata": gene_meta,
     }
-    if include_unverified_gene_draft and gene_meta.get("unverified_gene_draft_available"):
-        draft = _generate_unverified_gene_draft(gene, question, clinvar_context=g_summary)  # noqa: F821
+    if gene_meta.get("unverified_gene_draft_available"):
+        draft = _generate_unverified_gene_draft(
+            gene, question, clinvar_context=g_summary, use_lenient_validator=True
+        )
         if draft is not None:
             result["unverified_gene_draft"] = draft
     return result
+
+
 
 # ---------------------------------------------------------------------------
 # Fixed Hebrew safety messages
@@ -670,6 +653,39 @@ _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT = (
     "  - Output ONLY the sentence(s)."
 )
 
+
+# ---------------------------------------------------------------------------
+# Gene education draft prompts — tolerant prompts for "what is gene X?" questions.
+# Allow biological function, disease associations, English biomedical terms.
+# ---------------------------------------------------------------------------
+_GENE_EDUCATION_DRAFT_SYSTEM_PROMPT = (
+    "You are a genetic counseling assistant writing a short Hebrew educational summary "
+    "about a gene for a patient who just had genetic counseling in Israel.\n\n"
+    "TASK: Write 2-4 sentences in Hebrew that:\n"
+    "  1. Explain the gene general biological role.\n"
+    "  2. Mention broad medical condition categories broadly associated with this gene.\n"
+    "  3. End with: 'המשמעות של כל ממצא ספציפי נקבעת על ידי הצוות הגנטי.'\n\n"
+    "ALLOWED: Gene symbols in English, English biomedical terms (mismatch repair, "
+    "beta-globin, DNA repair), broad condition categories, the word 'pathogenic' "
+    "in a general non-personal context.\n\n"
+    "PROHIBITED: 'יש לך', 'אצלך', 'הסיכון שלך', diagnosis claims, "
+    "treatment/surgery/abortion recommendations, personal risk estimates, "
+    "question marks, emoji, ClinVar statistics.\n\n"
+    "FORMAT: Hebrew main text. Gene symbols and biomedical terms in English. "
+    "2-4 sentences. Maximum 500 characters. Output ONLY the sentences."
+)
+
+_GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT = (
+    "Write 2-3 short Hebrew sentences about the general biology and disease associations "
+    "of the given gene.\n\n"
+    "STRICT RULES: Hebrew ONLY for main text. Gene symbols and biomedical terms in English. "
+    "Mention broad condition categories only - NOT personal diagnosis. "
+    "Do NOT use 'יש לך', 'אצלך', 'הסיכון שלך'. "
+    "Do NOT recommend surgery, treatment, or screening. "
+    "End with: 'המשמעות האישית נקבעת על ידי הצוות הגנטי.' "
+    "No question marks, emoji. Maximum 500 characters. Output ONLY the sentences."
+)
+
 # Source note appended to every ClinVar-context draft.
 # Patient-friendly wording — does not mention "ClinVar" by name.
 _UNVERIFIED_DRAFT_SOURCE_NOTE_HE = (
@@ -858,6 +874,19 @@ _NON_GENE_TOKENS: frozenset[str] = frozenset({
     "MRI", "CT", "AI", "LP", "LB", "VCV", "RCV", "HPO",
 })
 
+
+
+def _is_standalone_gene_query(text: str, gene: str) -> bool:
+    """Return True when input is essentially just a gene symbol (Hebrew prefix OK)."""
+    stripped = text.strip().rstrip('?').strip()
+    g = gene.upper()
+    if stripped.upper() == g:
+        return True
+    if re.match(r'^[א-ת]-?' + re.escape(g) + r'$', stripped, re.IGNORECASE):
+        return True
+    return False
+
+
 # Intent phrases: signal the user is asking about a gene's general profile.
 _GENE_QUESTION_PHRASES: frozenset[str] = frozenset([
     # Hebrew — general gene-knowledge intent
@@ -953,6 +982,62 @@ def _is_mutation_specific_question(text: str) -> bool:
     return any(phrase in lower for phrase in _MUTATION_SPECIFIC_PHRASES)
 
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy gene-symbol matching (typo correction: XFTR -> CFTR, SOCKS1 -> SOX1)
+# ---------------------------------------------------------------------------
+_known_gene_set_cache = None
+
+
+def _get_known_gene_set():
+    """Lazily-cached set of all known gene symbols."""
+    global _known_gene_set_cache
+    if _known_gene_set_cache is not None:
+        return _known_gene_set_cache
+    genes = set()
+    for canon, _ in _GENE_PATTERNS:
+        genes.add(canon)
+    if gene_index._GENE_INDEX_AVAILABLE:
+        try:
+            for entry in gene_index.list_genes(limit=2000):
+                sym = str(entry.get("gene_symbol", "")).strip().upper()
+                if sym and len(sym) <= 10:
+                    genes.add(sym)
+        except Exception:
+            pass
+    _known_gene_set_cache = frozenset(g for g in genes if g and len(g) >= 2)
+    return _known_gene_set_cache
+
+
+def _fuzzy_match_gene_symbol(candidate):
+    """Return corrected gene symbol or None. Requires exactly one close match."""
+    import difflib
+    if not candidate or not re.match(r'^[A-Z][A-Z0-9]{1,9}$', candidate):
+        return None
+    if candidate in _NON_GENE_TOKENS:
+        return None
+    known = _get_known_gene_set()
+    if candidate in known:
+        return None  # exact match, not a typo
+    matches = difflib.get_close_matches(candidate, list(known), n=2, cutoff=0.60)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _extract_gene_with_correction(text):
+    """Like _extract_gene_symbol_from_question but also returns original typo token."""
+    gene = _extract_gene_symbol_from_question(text)
+    if gene:
+        return gene, None
+    for c in _GENE_SYMBOL_CANDIDATE_RE.findall(text):
+        if c in _NON_GENE_TOKENS:
+            continue
+        corrected = _fuzzy_match_gene_symbol(c)
+        if corrected:
+            return corrected, c
+    return None, None
+
+
 # ClinVar condition label hygiene
 # ---------------------------------------------------------------------------
 
@@ -1089,6 +1174,8 @@ _ALLOWED_INTRO_TOKENS: frozenset = frozenset({
     "VUS", "DNA", "RNA", "ClinVar", "NCBI", "ACMG", "OMIM",
     "BRCA1", "BRCA2", "NF1", "APC", "TP53", "SHANK3", "HBB", "SOX1",
     "CFTR", "ATM", "MLH1", "PALB2", "CHEK2", "STK11", "PTEN", "RB1",
+    "MSH2", "MSH6", "EPCAM", "MUTYH", "BRIP1", "RAD51C", "RAD51D",
+    "NBN", "CDH1", "VHL", "POLE", "NTHL1", "BMPR1A", "SMAD4",
     "pathogenic", "Pathogenic", "benign", "Benign", "likely", "Likely",
     "uncertain", "Uncertain", "significance", "Significance",
     "Neurofibromatosis", "Familial", "Adenomatous", "Polyposis",
@@ -1447,6 +1534,56 @@ def _validate_unverified_draft_clinvar_ok(text: str) -> "Optional[str]":
     return None
 
 
+
+_FORBIDDEN_GENE_EDUCATION_DRAFT_RE = re.compile(
+    r"יש\s+לך\s+(?:מחלה|סרטן|גידול|בעיה|סיכון)"
+    r"|אצלך\s+יש"
+    r"|הסיכון\s+שלך"
+    r"|הממצא\s+שלך\s+אומר"
+    r"|התוצאה\s+שלך\s+מצביעה"
+    r"|עליך\s+ל"
+    r"|כדאי\s+לך\s+ל"
+    r"|מומלץ\s+לך\s+ל"
+    r"|אובחנת"
+    r"|הגן\s+גורם\s+לך"
+    r"|הפלה|להפיל|הפסקת\s+הריון",
+    re.IGNORECASE,
+)
+
+_GENE_EDUCATION_BROKEN_RE = re.compile(
+    r"[\U0001F300-\U0001FAFF]"
+    r"|[\U0001F000-\U0001F9FF]"
+    r"|\bClnVar\b"
+    r"|קלינוואר"
+    r"|\[.*?\]"
+    r"|\{.*?\}"
+    r"|קסם"
+    r"|מרתק"
+    r"|מדהי[מם]",
+    re.IGNORECASE,
+)
+
+
+def _validate_gene_education_draft(text):
+    """Lenient validator for general gene education drafts."""
+    text = text.strip()
+    if not text or text == "-":
+        return "empty"
+    if len(text) > 600:
+        return f"too long ({len(text)} > 600)"
+    if re.search(r"[一-鿿぀-ゟ゠-ヿ]", text):
+        return "contains CJK characters"
+    m = _FORBIDDEN_GENE_EDUCATION_DRAFT_RE.search(text)
+    if m:
+        return f"personal/action phrase: {m.group(0)!r}"
+    m = _GENE_EDUCATION_BROKEN_RE.search(text)
+    if m:
+        return f"broken/hype output: {m.group(0)!r}"
+    if not re.search("[א-׿]", text):
+        return "no Hebrew characters"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # ClinVar phenotype normalization — maps raw English ClinVar phenotype strings
 # to clean, patient-friendly Hebrew labels before they reach the LLM.
@@ -1681,38 +1818,29 @@ def _build_clinvar_context_block(gene: str, clinvar_context: dict) -> str:
 def _generate_unverified_gene_draft(
     gene: str,
     question: str = "",
-    clinvar_context: "Optional[dict]" = None,
-) -> "Optional[dict]":
+    clinvar_context=None,
+    use_lenient_validator: bool = False,
+):
     """
     Generate an AI-written gene draft for patient opt-in display.
 
-    When ``clinvar_context`` is provided (Tier 2 genes with ClinVar data), the
-    draft summarises ONLY the supplied metadata \u2014 the LLM is explicitly forbidden
-    from inventing biological function, protein names, or pathways.
-
-    When ``clinvar_context`` is None (legacy / gene index unavailable), the
-    biology-from-memory prompt is used, with the same strict validation.
+    use_lenient_validator=True uses tolerant gene-education prompts and validator,
+    allowing biological function, disease associations, and English biomedical terms.
 
     Returns a structured dict or None (LLM unavailable / output fails validation).
-    Never raises \u2014 all failures are caught and logged.
-
-    The draft is NEVER written into approved gene cards or the KB.
-    approved=False and review_status='unreviewed' are set unconditionally.
+    Never raises.
     """
     from datetime import datetime, timezone
 
     try:
         client = create_llm_client()
     except ValueError as exc:
-        logger.debug(
-            "LLM not configured \u2014 skipping unverified draft for %r: %s",
-            gene, type(exc).__name__,
-        )
+        logger.debug("LLM not configured - skipping unverified draft for %r: %s",
+                     gene, type(exc).__name__)
         return None
 
     provider_name = type(client).__name__
     logger.debug("Generating unverified draft for %r via %s", gene, provider_name)
-
     use_clinvar_context = bool(clinvar_context)
 
     try:
@@ -1721,53 +1849,51 @@ def _generate_unverified_gene_draft(
             user_content = context_block
             if question:
                 user_content += f"\n\nUser question context: {question[:200]}"
-            system_prompt_1 = _UNVERIFIED_CLINVAR_DRAFT_SYSTEM_PROMPT
-            system_prompt_2 = _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT
+            if use_lenient_validator:
+                system_prompt_1 = _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT
+                system_prompt_2 = _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT
+            else:
+                system_prompt_1 = _UNVERIFIED_CLINVAR_DRAFT_SYSTEM_PROMPT
+                system_prompt_2 = _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT
         else:
             user_content = f"Gene symbol: {gene}"
             if question:
                 user_content += f"\nUser context: {question[:200]}"
-            system_prompt_1 = _UNVERIFIED_DRAFT_SYSTEM_PROMPT
-            system_prompt_2 = _UNVERIFIED_DRAFT_RETRY_SYSTEM_PROMPT
+            if use_lenient_validator:
+                system_prompt_1 = _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT
+                system_prompt_2 = _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT
+            else:
+                system_prompt_1 = _UNVERIFIED_DRAFT_SYSTEM_PROMPT
+                system_prompt_2 = _UNVERIFIED_DRAFT_RETRY_SYSTEM_PROMPT
 
         raw = client.call_text_raw(user_content, system_prompt=system_prompt_1)
         text = raw.strip()
-        rejection = _validate_unverified_draft(text) if text else "empty"
+        if use_lenient_validator:
+            rejection = _validate_gene_education_draft(text) if text else "empty"
+        else:
+            rejection = _validate_unverified_draft(text) if text else "empty"
         if rejection:
-            logger.info(
-                "Unverified gene draft for %r rejected (%s) \u2014 retrying with stricter prompt.",
-                gene, rejection,
-            )
+            logger.info("Unverified gene draft for %r rejected (%s) - retrying.", gene, rejection)
             raw2 = client.call_text_raw(user_content, system_prompt=system_prompt_2)
             text = raw2.strip()
-            # Second-pass uses relaxed validator: ClinVar allowed if otherwise safe.
-            # ClnVar, statistics, personal risk, and medical advice still block.
-            rejection = _validate_unverified_draft_clinvar_ok(text) if text else "empty"
+            if use_lenient_validator:
+                rejection = _validate_gene_education_draft(text) if text else "empty"
+            else:
+                rejection = _validate_unverified_draft_clinvar_ok(text) if text else "empty"
             if rejection:
-                logger.info(
-                    "Unverified gene draft for %r rejected after retry (%s) \u2014 trying deterministic fallback.",
-                    gene, rejection,
-                )
-                if use_clinvar_context:
-                    phenos = (
-                        clinvar_context.get("top_phenotypes")
-                        or clinvar_context.get("phenotypes")
-                        or []
-                    )
+                logger.info("Draft for %r rejected after retry (%s) - silent fallback.",
+                            gene, rejection)
+                if not use_lenient_validator and use_clinvar_context:
+                    phenos = (clinvar_context.get("top_phenotypes")
+                              or clinvar_context.get("phenotypes") or [])
                     normalized = _normalize_clinvar_phenotypes_for_patient(phenos, gene)
                     if normalized:
-                        logger.info(
-                            "Returning deterministic ClinVar draft for %r (%d contexts).",
-                            gene, len(normalized),
-                        )
                         return _build_deterministic_clinvar_draft(gene, normalized)
                 return None
 
-        model_name = (
-            getattr(client, "_model", None)
-            or os.environ.get("LOCAL_LLM_MODEL", None)
-            or provider_name
-        )
+        model_name = (getattr(client, "_model", None)
+                      or os.environ.get("LOCAL_LLM_MODEL", None)
+                      or provider_name)
         result = {
             "visible": True,
             "status": "ai_generated_unreviewed",
@@ -1787,11 +1913,15 @@ def _generate_unverified_gene_draft(
         return result
 
     except LLMClientError as exc:
-        logger.info("LLM unavailable for unverified draft for %r (%s).", gene, type(exc).__name__)
+        logger.info("LLM unavailable for unverified draft for %r (%s).",
+                    gene, type(exc).__name__)
         return None
     except Exception as exc:
-        logger.warning("Unexpected error generating unverified draft for %r (%s).", gene, type(exc).__name__)
+        logger.warning("Unexpected error generating unverified draft for %r (%s).",
+                       gene, type(exc).__name__)
         return None
+
+
 
 _CJK_RE = re.compile(r"[一-鿿぀-ゟ゠-ヿ]")
 _CJK_ARTIFACT_MAX = 3
@@ -2282,26 +2412,22 @@ def _call_local_llm_for_gene_summary(
         return None
 
 
-def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene_draft: bool = False) -> Optional[dict]:
+def _build_gene_clinvar_answer(
+    question: str,
+    gene: str,
+    include_unverified_gene_draft: bool = False,
+    corrected_from=None,
+):
     """
     Build the full /ask response for a gene-level ClinVar question.
-
-    Returns None only when the gene_index is unavailable (caller falls through).
-    When the gene is not found in the index, returns a safe "not found" response.
-    Always uses the deterministic formatter; optionally layers an LLM phrasing pass.
-
-    The returned dict includes a ``gene_metadata`` key that the Pydantic response
-    model (`CounselingAskResponse`) serializes conditionally — it appears in the
-    JSON only for gene-level responses, keeping the standard 5-field schema intact
-    for all other answer types.
+    corrected_from: original typo token if gene was fuzzy-corrected, else None.
+    Returns None only when the gene_index is unavailable.
     """
     summary = gene_index.get_gene_summary(gene)
     if summary is None:
-        # Gene not found in the local ClinVar index.
-        # Check approved sources in priority order: Tier 1a → Tier 1b → Tier 3.
         card_summary = gene_cards.get_approved_summary(gene)
         if card_summary:
-            # Tier 1a (gene_cards card only — no ClinVar stats available).
+            # Tier 1a (gene_cards only)
             safety_note = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
             preamble_1a = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
             det = preamble_1a + card_summary + safety_note
@@ -2314,7 +2440,7 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
                 "llm_used": False,
                 "fallback_used": True,
                 "llm_mode": "none",
-                    "gene_metadata": {
+                "gene_metadata": {
                     "gene_symbol": gene,
                     "data_source": "Curated educational content",
                     "llm_used": False,
@@ -2326,14 +2452,14 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
                     "unverified_gene_draft_available": False,
                 },
             }
-        # Tier 1b: Gene Knowledge Base approved record (no ClinVar stats).
         gk_patient = gene_knowledge.get_gene_patient_summary(gene)
         gk_vus = gene_knowledge.get_gene_vus_note(gene)
         if gk_patient:
+            # Tier 1b (gene knowledge base)
             safety_note = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
             preamble_1b = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
             parts_1b = [preamble_1b + gk_patient]
-            if gk_vus and _mentions_vus(question):  # VUS note only when question asks about VUS
+            if gk_vus and _mentions_vus(question):
                 parts_1b.append(gk_vus)
             det = "\n\n".join(parts_1b) + safety_note
             suggested_1b = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
@@ -2346,7 +2472,7 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
                 "llm_used": False,
                 "fallback_used": True,
                 "llm_mode": "none",
-                    "gene_metadata": {
+                "gene_metadata": {
                     "gene_symbol": gene,
                     "data_source": "Gene Knowledge Base",
                     "llm_used": False,
@@ -2358,11 +2484,15 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
                     "unverified_gene_draft_available": False,
                 },
             }
-        # Tier 3: gene not in any approved source and not in local ClinVar index.
-        # Phrased to avoid implying the gene does not exist globally.
+        # Tier 3: not in any approved source and not in ClinVar index
+        correction_note = (
+            f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
+            if corrected_from else ""
+        )
         return {
             "answer": (
-                f"הגן {gene} אינו כלול במאגר המידע המקומי שעליו מתבסס הצ'אט. "
+                correction_note
+                + f"הגן {gene} אינו כלול במאגר המידע המקומי שעליו מתבסס הצ'אט. "
                 "ייתכן שהמאגר המקומי טרם עודכן עם נתונים עבור גן זה. "
                 "לבירור המדויק — פנה/י לצוות הגנטי."
             ),
@@ -2386,11 +2516,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         }
 
     # Gene IS in the ClinVar index.
-    # Priority order: Tier 1a (gene_cards) → Tier 1b (gene_knowledge) → Tier 2 (ClinVar-only).
     curated = gene_cards.get_approved_summary(gene)
     if curated:
-        # Tier 1a: approved gene card — curated patient education.
-        # ClinVar stats go to gene_metadata only; main answer gets a brief reference note.
+        # Tier 1a with ClinVar stats
         preamble = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
         det = preamble + curated
         if summary:
@@ -2421,14 +2549,14 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             },
         }
 
-    # Tier 1b: Gene Knowledge Base approved record + ClinVar stats in metadata.
     gk_patient_ci = gene_knowledge.get_gene_patient_summary(gene)
     gk_vus_ci = gene_knowledge.get_gene_vus_note(gene)
     if gk_patient_ci:
+        # Tier 1b with ClinVar stats
         safety_note_ci = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
         preamble_ci = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
         parts_ci = [preamble_ci + gk_patient_ci]
-        if gk_vus_ci and _mentions_vus(question):  # VUS note only when question asks about VUS
+        if gk_vus_ci and _mentions_vus(question):
             parts_ci.append(gk_vus_ci)
         det_ci = "\n\n".join(parts_ci) + safety_note_ci
         suggested_ci = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
@@ -2456,24 +2584,22 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             },
         }
 
-    # Tier 2: no approved gene card or knowledge base record, but gene is in ClinVar index.
-    # Main answer: short patient-friendly message ONLY — no raw ClinVar dump.
-    # ClinVar details (significance_breakdown, top_phenotypes) remain in
-    # gene_metadata for the collapsed technical UI card.
-    # No LLM framing — deterministic only, to prevent broken Hebrew intros.
+    # Tier 2: in ClinVar index but no approved Hebrew card
+    correction_prefix = (
+        f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
+        if corrected_from else ""
+    )
     tier2_answer = (
-        f"מצאתי את הגן {gene} במאגר, אבל אין לי עדיין סיכום ביולוגי מאושר בעברית עבורו.\n\n"
-        "לכן לא אציג הסבר ביולוגי כמידע מאושר. "
-        "אפשר לבחור לראות טיוטת מידע כללית שנוצרה על ידי AI, "
-        "אך היא לא עברה בדיקה מקצועית ועלולה להיות שגויה או חלקית.\n\n"
-        "חשוב לדעת: מידע זה אינו מפרש את תוצאת הבדיקה האישית שלך. "
+        correction_prefix
+        + f"מצאתי את הגן {gene} במאגר ClinVar, אך אין עדיין סיכום ביולוגי מאושר בעברית עבורו.\n\n"
+        "המידע כללי בלבד ואינו מפרש תוצאה אישית. "
         "לפרשנות אישית יש לפנות לצוות הגנטי."
     )
     suggested = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
-    unverified_draft = None
-    if include_unverified_gene_draft:
-        unverified_draft = _generate_unverified_gene_draft(gene, question, clinvar_context=summary)
-    result: dict = {
+    unverified_draft = _generate_unverified_gene_draft(
+        gene, question, clinvar_context=summary, use_lenient_validator=True
+    )
+    result = {
         "answer": tier2_answer,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
@@ -2499,6 +2625,7 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     if unverified_draft is not None:
         result["unverified_gene_draft"] = unverified_draft
     return result
+
 
 
 def _build_gene_education_fallback(gene: str) -> dict:
@@ -2918,35 +3045,44 @@ def answer_question(
     #    index (e.g. HBB, SOX1) beyond the typo-tolerant _GENE_PATTERNS set.
     if not topic and _mentions_vus(text):
         gene = _detect_known_gene(text)
-        if gene is None and gene_index._GENE_INDEX_AVAILABLE:
-            gene = _extract_gene_symbol_from_question(text)
+        if gene is None:
+            if gene_index._GENE_INDEX_AVAILABLE:
+                gene, _ = _extract_gene_with_correction(text)
         if gene:
             return _build_known_gene_answer(
                 gene, question=text,
-                include_unverified_gene_draft=include_unverified_gene_draft,
+                include_unverified_gene_draft=True,
             )
 
     # 4.5. Gene-level question — ClinVar stats (when index available) or curated
     #      educational fallback (when index is down but gene is in _GENE_PATTERNS).
     #      Must run BEFORE step 5 so "מה המשמעות של הגן APC" is not swallowed by the
     #      follow-up detector even when there is prior VUS context.
+    #      Also detects standalone gene symbol input ("CFTR" alone, "בCFTR")
+    #      and fuzzy-corrected typos ("XFTR" -> CFTR).
     if not topic:
         if gene_index._GENE_INDEX_AVAILABLE:
-            gene_candidate = _extract_gene_symbol_from_question(text)
-            if gene_candidate and _is_gene_level_question(text):
+            gene_candidate, corrected_from = _extract_gene_with_correction(text)
+            if gene_candidate and (
+                _is_gene_level_question(text)
+                or _is_standalone_gene_query(text, gene_candidate)
+            ):
                 result = _build_gene_clinvar_answer(
                     text, gene_candidate,
-                    include_unverified_gene_draft=include_unverified_gene_draft,
+                    include_unverified_gene_draft=True,
+                    corrected_from=corrected_from,
                 )
                 if result is not None:
                     return result
         else:
-            # Index unavailable: pattern-based detection + educational fallback.
             gene_candidate = _detect_known_gene(text)
-            if gene_candidate and _is_gene_level_question(text):
+            if gene_candidate and (
+                _is_gene_level_question(text)
+                or _is_standalone_gene_query(text, gene_candidate)
+            ):
                 return _build_gene_education_fallback(gene_candidate)
 
-    # 5. Follow-up handling — vague continuation phrases resolved via
+        # 5. Follow-up handling — vague continuation phrases resolved via
     #    last_topic / sanitized conversation context, not KB keyword scoring.
     if not topic and _is_followup_question(text):
         followup_topic, followup_gene = _resolve_followup_context(safe_context, last_topic)
