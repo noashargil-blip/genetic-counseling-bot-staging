@@ -6,6 +6,7 @@
 let messages = [];
 let isSending = false;
 let lastTopic = null;
+let lastGeneSymbol = null;
 
 const CONTEXT_WINDOW = 6;
 
@@ -161,6 +162,7 @@ async function sendQuestion(question, topic) {
 
   const conversationContext = buildConversationContext();
   const lastTopicForThisTurn = lastTopic;
+  const lastGeneSymbolForThisTurn = lastGeneSymbol;
 
   addMessage('user', question);
   const pendingId = addMessage('bot-pending', PENDING_TEXT_HE);
@@ -174,6 +176,7 @@ async function sendQuestion(question, topic) {
         topic: topic || undefined,
         conversation_context: conversationContext.length ? conversationContext : undefined,
         last_topic: lastTopicForThisTurn || undefined,
+        last_gene_symbol: lastGeneSymbolForThisTurn || undefined,
       }),
     });
 
@@ -211,6 +214,9 @@ async function sendQuestion(question, topic) {
       }
     }
     lastTopic = data.matched_topic || lastTopic;
+    if (data.gene_metadata && data.gene_metadata.gene_symbol) {
+      lastGeneSymbol = data.gene_metadata.gene_symbol;
+    }
   } catch (err) {
     const msg = 'לא ניתן היה להתחבר לשרת. בדקי את החיבור לאינטרנט ונסי שוב.';
     replaceMessage(pendingId, 'bot', msg, 'out_of_scope', [], null, null, false, true);
@@ -371,7 +377,9 @@ function renderMessages() {
     let html = `<p class="msg-text">${escHtml(m.text)}</p>`;
 
     if (isBot && m.role !== 'bot-pending' && !m.isWelcome) {
-      html += `<p class="msg-disclaimer">${escHtml(DISCLAIMER_HE)}</p>`;
+      if (!m.generalDraft) {
+        html += `<p class="msg-disclaimer">${escHtml(DISCLAIMER_HE)}</p>`;
+      }
       if (m.geneMetadata) {
         html += buildGeneMetadataHtml(m.geneMetadata);
       } else if (m.llmUsed) {
@@ -609,47 +617,16 @@ function buildUnverifiedDraftCard(msg) {
   return card;
 }
 
-// ── General education AI draft card ───────────────────────────────────
-// Auto-shown when backend returns unverified_general_draft.
+// ── General education AI draft badge ──────────────────────────────────
+// Compact badge shown when backend returns unverified_general_draft.
 
 function buildGeneralDraftCard(msg) {
   if (!msg.generalDraft) return null;
   const d = msg.generalDraft;
-
-  const card = document.createElement('div');
-  card.className = 'general-draft-card';
-
-  const details = document.createElement('details');
-  details.className = 'general-draft-details';
-  details.open = true;
-
-  const summary = document.createElement('summary');
-  summary.className = 'general-draft-summary';
-  summary.textContent = 'מידע ניסיוני לא מאומת';
-  details.appendChild(summary);
-
-  const subtitle = document.createElement('p');
-  subtitle.className = 'general-draft-subtitle';
-  subtitle.textContent = 'מידע שנוצר על ידי בינה מלאכותית — לא עבר בדיקה מקצועית ולא מהווה ייעוץ רפואי';
-  details.appendChild(subtitle);
-
-  const warning = document.createElement('p');
-  warning.className = 'general-draft-warning';
-  warning.textContent = d.warning_he || '';
-  details.appendChild(warning);
-
-  const text = document.createElement('p');
-  text.className = 'general-draft-text';
-  text.textContent = d.text_he || '';
-  details.appendChild(text);
-
-  const foot = document.createElement('p');
-  foot.className = 'general-draft-footer';
-  foot.textContent = d.source_note_he || 'מידע זה נוצר אוטומטית ולא מאושר על ידי צוות מקצועי.';
-  details.appendChild(foot);
-
-  card.appendChild(details);
-  return card;
+  const badge = document.createElement('p');
+  badge.className = 'ai-badge';
+  badge.textContent = d.warning_he || 'מידע AI לא מאומת — להסבר כללי בלבד.';
+  return badge;
 }
 
 // ── Feedback row ──────────────────────────────────────────────────────────────

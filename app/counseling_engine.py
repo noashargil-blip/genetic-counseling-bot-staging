@@ -701,26 +701,28 @@ _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT = (
 _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT = (
     "You are a genetic counseling assistant writing a short Hebrew educational summary "
     "about a gene for a patient who just had genetic counseling in Israel.\n\n"
-    "TASK: ענה בעברית פשוטה, ב-2 עד 4 משפטים קצרים בלבד. Write concisely:\n"
-    "  1. Explain the gene's general biological role: what protein it encodes and\n"
-    "     what biological process it participates in.\n"
-    "  2. End with ONE safety sentence:\n"
-    "     'המשמעות של כל ממצא ספציפי נקבעת על ידי הצוות הגנטי.'\n\n"
+    "TASK: ענה בעברית פשוטה וקצרה, ב-2 עד 4 משפטים קצרים בלבד.\n"
+    "  1. Explain the gene's main biological role (what protein it produces or what "
+    "biological process it participates in).\n"
+    "  2. If the gene has ONE very well-known and central clinical association, you may "
+    "mention it cautiously in a single sentence using 'קשור ל...' — not 'גורם ל...'.\n"
+    "  3. End with ONE safety sentence: "
+    "'המשמעות של כל ממצא ספציפי נקבעת על ידי הצוות הגנטי.'\n\n"
     "ALLOWED:\n"
-    "  - Gene symbols in English (BRCA1, CFTR, MSH2, etc.)\n"
-    "  - English biomedical terms (mismatch repair, beta-globin, DNA repair)\n"
-    "  - Molecular/biological function descriptions\n"
+    "  - Gene symbols in English (BRCA1, DMD, MSH2, APOE, etc.)\n"
+    "  - English biomedical terms (dystrophin, mismatch repair, beta-globin, etc.)\n"
+    "  - A single specific, named clinical association when highly central to this gene\n"
     "  - The word 'pathogenic' in a general non-personal context\n\n"
     "PROHIBITED:\n"
     "  - 'יש לך', 'אצלך', 'הסיכון שלך', 'הממצא שלך', 'התוצאה שלך'\n"
-    "  - Diagnosis claims, treatment/surgery/medication recommendations\n"
-    "  - Screening recommendations for this specific user\n"
-    "  - Personal risk estimates\n"
-    "  - Question marks, emoji, or ClinVar statistics\n"
-    "  - אל תציין מחלות, סוגי סרטן, תסמונות או סיכונים הקשורים לגן\n"
-    "    אלא אם הם נמסרו במפורש בהקשר המאושר שסופק לך.\n"
-    "  - Do NOT list disease associations, cancer types, syndromes, or\n"
-    "    condition categories unless explicitly provided in approved context.\n\n"
+    "  - Definitive causation: 'גורם ל...' / 'מוביל ל...' — use 'קשור ל' instead\n"
+    "  - Cancer predisposition framing: 'נטייה לסרטן'\n"
+    "  - Lists of multiple diseases, cancers, or conditions\n"
+    "  - 'מצבים כמו...' / 'diseases like...'\n"
+    "  - 'סוגי סרטן שונים' (various cancer types)\n"
+    "  - Treatment, surgery, or screening recommendations\n"
+    "  - Personal risk estimates or 'you should...'\n"
+    "  - Question marks, emoji, or ClinVar statistics\n\n"
     "FORMAT:\n"
     "  - Hebrew ONLY for main text. Gene symbols and medical terms in English.\n"
     "  - 2-4 short sentences. Maximum 450 characters.\n"
@@ -728,16 +730,19 @@ _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT = (
 )
 
 _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT = (
-    "Write 2-3 short Hebrew sentences about the general molecular biology "
-    "of the given gene.\n\n"
+    "Write 2-3 short Hebrew sentences about this gene.\n\n"
     "STRICT RULES:\n"
     "  - Hebrew ONLY for main text. Gene symbols and biomedical terms in English.\n"
-    "  - Describe ONLY the molecular function or biological role.\n"
-    "  - Do NOT mention diseases, cancers, syndromes, or medical conditions.\n"
+    "  - Sentence 1: the gene's molecular/biological role only.\n"
+    "  - Sentence 2 (optional): ONE specific, named clinical association if highly "
+    "central to this gene — use 'קשור ל' not 'גורם ל'. Do NOT invent this.\n"
+    "  - Final sentence: 'המשמעות האישית נקבעת על ידי הצוות הגנטי.'\n"
     "  - Do NOT use 'יש לך', 'אצלך', 'הסיכון שלך'.\n"
+    "  - Do NOT say 'גורם ל...' or 'נטייה לסרטן'.\n"
+    "  - Do NOT give lists of diseases.\n"
+    "  - Do NOT say 'מצבים כמו...' or 'סוגי סרטן שונים'.\n"
     "  - Do NOT recommend surgery, treatment, or screening.\n"
     "  - Do NOT include ClinVar statistics or variant counts.\n"
-    "  - End with: 'המשמעות האישית נקבעת על ידי הצוות הגנטי.'\n"
     "  - No question marks, emoji, or disclaimers.\n"
     "  - Maximum 500 characters.\n"
     "  - Output ONLY the sentences."
@@ -999,6 +1004,16 @@ _GENE_QUESTION_PHRASES: frozenset[str] = frozenset([
     "איזה וריאנט",
     "מוטציה של הגן",
     "וריאנט של הגן",
+    # Association / disease-link phrasings — "לאיזה מצבים קליניים הגן APOE מקושר?"
+    "לאיזה מצבים",
+    "לאיזה מחלות",
+    "מקושר",
+    "קשורות ל",
+    "מה הקשר",        # covers "מה הקשר ל", "מה הקשר של", "מה הקשר שלו"
+    # English association phrasings
+    "associated with",
+    "disease association",
+    "clinical conditions",
 ])
 
 # Hebrew safety note appended to gene-level answers.
@@ -1644,14 +1659,20 @@ _GENE_EDUCATION_BROKEN_RE = re.compile(
 
 
 # Disease/cancer association language — hallucination risk in unapproved gene drafts.
+# Allows specific single named associations ("קשור למחלת Duchenne", "קשור לסרטן המעי הגס").
+# Blocks vague/list patterns that invite hallucination.
 _GENE_EDUCATION_DISEASE_ASSOC_RE = re.compile(
-    r"קשור\s+ל(סרטן|מחלה|מחלות|תסמונת|הפרעה|מוגבלות|מצבים)"
-    r"|נטייה\s+(לסרטן|למחלה|לתסמונת)"
-    r"|גורמ(?:ת|ים|ות)?\s+ל(מחלה|מחלות|סרטן|תסמונת|הפרעה)"
-    r"|מוביל\s+(למחלה|לסרטן|לתסמונת)"
-    r"|מחלות?\s+כמו"
+    # Definitive causation — always block; use "קשור ל" instead.
+    r"גורמ(?:ת|ים|ות)?\s+ל(?:מחלה|מחלות|סרטן|תסמונת|הפרעה)"
+    # Vague disease-category associations — hallucination-prone (no specific name given).
+    r"|קשור\s+ל(?:מחלות|הפרעה|הפרעות|מוגבלות|מצבים)"
+    # Cancer predisposition framing — personal risk framing.
+    r"|נטייה\s+לסרטן"
+    # "various cancer types" — invitation to invent a list.
+    r"|סוגי\s+סרטן\s+שונים"
+    # "conditions/diseases like ..." structure — invites hallucinated lists.
     r"|מצבים\s+כמו"
-    r"|סוגי\s+סרטן\s+שונים",
+    r"|מחלות\s+כמו",
     re.IGNORECASE,
 )
 
@@ -2041,15 +2062,9 @@ _GENERAL_EDUCATION_RETRY_SYSTEM_PROMPT = (
     "  - Output ONLY the sentences."
 )
 
-_GENERAL_EDUCATION_WARNING_HE = (
-    "המידע הבא נוצר אוטומטית ולא עבר בדיקה מקצועית. "
-    "הוא מיועד להסבר כללי בלבד, ואינו מפרש תוצאה אישית, "
-    "אינו אבחנה, ואינו מחליף ייעוץ רפואי."
-)
+_GENERAL_EDUCATION_WARNING_HE = "מידע AI לא מאומת — להסבר כללי בלבד."
 
-_GENERAL_EDUCATION_SOURCE_NOTE_HE = (
-    "מידע שנוצר על ידי בינה מלאכותית — לא עבר בדיקה מקצועית ולא מהווה ייעוץ רפואי."
-)
+_GENERAL_EDUCATION_SOURCE_NOTE_HE = "נוצר אוטומטית, לא עבר בדיקה מקצועית."
 
 
 def _validate_general_education_draft(text: str) -> "tuple[bool, str]":
@@ -2148,10 +2163,7 @@ def _build_general_education_answer(question: str) -> "tuple[Optional[dict], dic
         return None, ai_debug
 
     return {
-        "answer": (
-            "שאלתך עוסקת במושג כללי בגנטיקה. "
-            "להלן הסבר שנוצר אוטומטית — אנא קרא את ההסתייגות המצורפת."
-        ),
+        "answer": text,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
         "matched_topic": "general_education_ai",
@@ -3489,6 +3501,7 @@ def answer_question(
     conversation_context: Optional[list] = None,
     last_topic: Optional[str] = None,
     include_unverified_gene_draft: bool = False,
+    last_gene_symbol: Optional[str] = None,
 ) -> dict:
     """
     Build the full response for POST /ask.
@@ -3571,9 +3584,11 @@ def answer_question(
     #      follow-up detector even when there is prior VUS context.
     #      Also detects standalone gene symbol input ("CFTR" alone, "בCFTR")
     #      and fuzzy-corrected typos ("XFTR" → CFTR).
+    _gene_found_in_text: Optional[str] = None  # track for 4.5b below
     if not topic:
         if gene_index._GENE_INDEX_AVAILABLE:
             gene_candidate, corrected_from = _extract_gene_with_correction(text)
+            _gene_found_in_text = gene_candidate
             if gene_candidate and (
                 _is_gene_level_question(text)
                 or _is_standalone_gene_query(text, gene_candidate)
@@ -3588,11 +3603,28 @@ def answer_question(
         else:
             # Index unavailable: pattern-based detection + educational fallback.
             gene_candidate = _detect_known_gene(text)
+            _gene_found_in_text = gene_candidate
             if gene_candidate and (
                 _is_gene_level_question(text)
                 or _is_standalone_gene_query(text, gene_candidate)
             ):
                 return _build_gene_education_fallback(gene_candidate)
+
+    # 4.5b. Gene follow-up with context: if the question is gene-level but no gene
+    #       was found in the current text, route to the gene from the previous turn.
+    if (
+        not topic
+        and last_gene_symbol
+        and not _gene_found_in_text
+        and _is_gene_level_question(text)
+        and gene_index._GENE_INDEX_AVAILABLE
+    ):
+        result = _build_gene_clinvar_answer(
+            text, last_gene_symbol,
+            include_unverified_gene_draft=True,
+        )
+        if result is not None:
+            return result
 
     # 5. Follow-up handling — vague continuation phrases resolved via
     #    last_topic / sanitized conversation context, not KB keyword scoring.
@@ -3607,6 +3639,17 @@ def answer_question(
 
     # 6. Knowledge-base lookup (exact + fuzzy fallback tier inside kb.py).
     entry = kb.match_question(text, topic_hint=topic)
+    # Guard: reject x_linked KB match when the question has no X-chromosome signal.
+    # "מה זה כרומוזום?" fuzzy-scores 0.600 against x_linked via "תלוי כרומוזום x".
+    if entry is not None and entry.get("id") == "x_linked":
+        lower_q = text.lower()
+        _x_signals = (
+            "x-linked", "x linked", "x_linked",
+            "תאחיזה", "תלויית x", "תלוי x",
+            "תלוי-x", "תלויה ב-x", "כרומוזום x", "chromosome x",
+        )
+        if not any(sig in lower_q for sig in _x_signals):
+            entry = None
     if entry is None:
         # 6.5. General education AI fallback — fires only in staging/development
         # with AI_GENERAL_EDUCATION_FALLBACK_ENABLED=true, and only for safe

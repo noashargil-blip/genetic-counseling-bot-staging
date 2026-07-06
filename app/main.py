@@ -212,6 +212,14 @@ class CounselingAskRequest(BaseModel):
             "Default is False — no draft is generated unless explicitly requested."
         ),
     )
+    last_gene_symbol: Optional[str] = Field(
+        None,
+        description=(
+            "Gene symbol from the previous assistant turn (e.g. 'APOE'). "
+            "Used for follow-up routing when the user asks a gene-level question "
+            "without repeating the gene name."
+        ),
+    )
 
 
 class CounselingAskResponse(BaseModel):
@@ -447,6 +455,7 @@ def ask(request: CounselingAskRequest):
         conversation_context=context,
         last_topic=request.last_topic,
         include_unverified_gene_draft=request.include_unverified_gene_draft,
+        last_gene_symbol=request.last_gene_symbol,
     )
     return CounselingAskResponse(**result)
 
