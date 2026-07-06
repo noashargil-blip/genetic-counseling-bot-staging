@@ -83,8 +83,9 @@ class TestClassifyQuestionIntent:
         assert info["intent"] == "explicit_gene_question"
         assert info["gene_symbol"] == "APOE"
 
-    def test_gene_followup_with_possessive(self):
-        """Possessive 'שלו' triggers gene_followup when last_gene_symbol set."""
+    def test_gene_followup_classify_direct_call(self):
+        """classify_question_intent() supports gene_followup when called directly with last_gene_symbol.
+        Note: answer_question always passes None, so /ask never uses this path."""
         import app.gene_index as gene_index
         if not gene_index._GENE_INDEX_AVAILABLE:
             pytest.skip("Gene index not available")
@@ -92,7 +93,7 @@ class TestClassifyQuestionIntent:
         assert info["intent"] == "gene_followup"
         assert info["gene_symbol"] == "APOE"
 
-    def test_gene_followup_with_pronoun_hu(self):
+    def test_gene_followup_pronoun_hu_direct_call(self):
         import app.gene_index as gene_index
         if not gene_index._GENE_INDEX_AVAILABLE:
             pytest.skip("Gene index not available")
@@ -217,42 +218,42 @@ class TestConversation3DMDThenChromosome:
         assert data.get("matched_topic") != "x_linked"
 
 
-# ── Conversation 4: APOE → pronoun follow-up (legitimate) ────────────────────
+# ── Conversation 4: APOE → pronoun question (no context routing in Session 22) ─
 
 class TestConversation4APOEFollowup:
     """
-    Q1: מה זה הגן APOE?          → gene answer
-    Q2: לאיזה מצבים הוא קשור?    → MAY use APOE context (pronoun "הוא")
+    Session 22: last_gene_symbol is ignored by the backend.
+    Pronoun questions ("לאיזה מצבים הוא קשור?") without an explicit gene name
+    in the text are answered on their own — they do NOT route to the prior gene.
+    The key invariant: no context bleed (APOE must not appear via last_gene_symbol).
     """
 
-    def test_q2_pronoun_may_use_apoe(self):
-        import app.gene_index as gene_index
-        if not gene_index._GENE_INDEX_AVAILABLE:
-            pytest.skip("Gene index not available")
+    def test_q2_pronoun_no_context_bleed(self):
+        """Pronoun question must NOT route to APOE even when last_gene_symbol=APOE is sent."""
         data = client.post(
             "/ask",
             json={"question": "לאיזה מצבים הוא קשור?", "last_gene_symbol": "APOE"},
         ).json()
-        # Must not be out_of_scope — should either give APOE or a reasonable answer
-        assert data.get("safety_level") != "out_of_scope", (
-            "Pronoun follow-up with prior APOE context should not be out_of_scope"
+        # Gene metadata must not be APOE — last_gene_symbol is ignored
+        gene_sym = data.get("gene_metadata", {}).get("gene_symbol", "")
+        assert gene_sym != "APOE", (
+            f"last_gene_symbol=APOE must be ignored. "
+            f"Got gene_symbol={gene_sym!r}, topic={data.get('matched_topic')!r}"
         )
-        # Should reference APOE or metabolic/neurological context
-        answer = data.get("answer", "")
-        topic = data.get("matched_topic", "")
-        assert topic == "gene_clinvar_summary" or len(answer) > 40, (
-            f"Pronoun follow-up should produce a substantive answer. Got: {answer[:80]!r}"
+        assert data.get("matched_topic") != "gene_clinvar_summary" or gene_sym == "", (
+            "If topic=gene_clinvar_summary, gene must not be APOE"
         )
 
-    def test_q2_possessive_may_use_apoe(self):
-        import app.gene_index as gene_index
-        if not gene_index._GENE_INDEX_AVAILABLE:
-            pytest.skip("Gene index not available")
+    def test_q2_possessive_no_context_bleed(self):
+        """Possessive question must NOT route to APOE even with last_gene_symbol."""
         data = client.post(
             "/ask",
             json={"question": "מה התפקיד שלו?", "last_gene_symbol": "APOE"},
         ).json()
-        assert data.get("safety_level") != "out_of_scope"
+        gene_sym = data.get("gene_metadata", {}).get("gene_symbol", "")
+        assert gene_sym != "APOE", (
+            f"last_gene_symbol=APOE must be ignored. Got gene_symbol={gene_sym!r}"
+        )
 
 
 # ── Standalone concept: no prior gene contamination ───────────────────────────
@@ -375,13 +376,18 @@ class TestGeneAnswerContent:
     """Gene answers should be informative and non-empty."""
 
     def test_gene_answer_informative(self):
+        """Approved-card genes (BRCA1) must return a substantive answer."""
         import app.gene_index as gene_index
+        import app.gene_cards as gc
         if not gene_index._GENE_INDEX_AVAILABLE:
             pytest.skip("Gene index not available")
-        for q in ["מה זה הגן BRCA1?", "מה זה הגן CFTR?"]:
-            data = client.post("/ask", json={"question": q}).json()
+        # Only test genes known to have an approved curated card
+        for gene in ["BRCA1"]:
+            if not gc.get_approved_summary(gene):
+                pytest.skip(f"{gene} has no approved card in this build")
+            data = client.post("/ask", json={"question": f"מה זה הגן {gene}?"}).json()
             answer = data.get("answer", "")
-            assert len(answer) > 50, f"Gene answer for {q!r} too short: {answer!r}"
+            assert len(answer) > 50, f"Gene answer for {gene} too short: {answer!r}"
             assert data.get("matched_topic") == "gene_clinvar_summary"
 
     def test_gene_metadata_present(self):

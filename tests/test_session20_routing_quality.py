@@ -265,15 +265,17 @@ class TestWarningConstants:
             )
 
 
-# ── last_gene_symbol follow-up routing ───────────────────────────────────────
+# ── last_gene_symbol is disabled — no context bleed ─────────────────────────
 
 class TestLastGeneSymbolRouting:
-    """last_gene_symbol context enables gene follow-up without repeating gene name."""
+    """
+    Session 22: last_gene_symbol is accepted in the request body (backward
+    compat) but the backend ignores it. Every question is answered on its
+    own text only.
+    """
 
-    def test_gene_followup_with_last_gene_symbol(self):
-        import app.gene_index as gene_index
-        if not gene_index._GENE_INDEX_AVAILABLE:
-            pytest.skip("Gene index not available")
+    def test_last_gene_symbol_ignored(self):
+        """Sending last_gene_symbol must NOT cause the answer to be about that gene."""
         data = client.post(
             "/ask",
             json={
@@ -282,25 +284,33 @@ class TestLastGeneSymbolRouting:
             },
         ).json()
         topic = data.get("matched_topic", "")
-        answer = data.get("answer", "")
-        # Should route to gene answer for BRCA1
-        assert (
-            topic == "gene_clinvar_summary"
-            or "BRCA1" in answer
-        ), (
-            f"Follow-up with last_gene_symbol=BRCA1 should route to gene answer. "
+        # Must NOT route to gene_clinvar_summary — there is no gene name in the question text
+        assert topic != "gene_clinvar_summary", (
+            f"last_gene_symbol=BRCA1 must be ignored. "
             f"Got topic={topic!r}"
         )
 
-    def test_no_last_gene_symbol_no_followup_routing(self):
-        """Without last_gene_symbol, vague question should not route to a gene."""
+    def test_vague_question_no_gene_routing(self):
+        """Vague pronoun question without explicit gene name never routes to a gene."""
         data = client.post(
             "/ask",
             json={"question": "מה הקשר שלו למחלות?"},
         ).json()
         topic = data.get("matched_topic", "")
-        # Should NOT route to gene_clinvar_summary without context
         assert topic != "gene_clinvar_summary", (
-            f"Without last_gene_symbol, should not route to gene_clinvar_summary. "
-            f"Got topic={topic!r}"
+            f"Vague pronoun question should not route to gene. Got topic={topic!r}"
+        )
+
+    def test_explicit_gene_still_routes(self):
+        """When the gene name IS in the question text, routing works normally."""
+        import app.gene_index as gene_index
+        if not gene_index._GENE_INDEX_AVAILABLE:
+            pytest.skip("Gene index not available")
+        data = client.post(
+            "/ask",
+            json={"question": "מה זה הגן BRCA1?"},
+        ).json()
+        topic = data.get("matched_topic", "")
+        assert topic == "gene_clinvar_summary", (
+            f"Explicit gene name in question should route to gene. Got topic={topic!r}"
         )

@@ -455,7 +455,7 @@ def ask(request: CounselingAskRequest):
         conversation_context=context,
         last_topic=request.last_topic,
         include_unverified_gene_draft=request.include_unverified_gene_draft,
-        last_gene_symbol=request.last_gene_symbol,
+        # last_gene_symbol is intentionally not passed — context bleed prevention.
     )
     return CounselingAskResponse(**result)
 

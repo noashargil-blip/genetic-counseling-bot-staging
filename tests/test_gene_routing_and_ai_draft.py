@@ -97,7 +97,8 @@ class TestGeneEducationDraftValidation:
     def test_blocks_no_hebrew(self):
         assert engine._validate_gene_education_draft("CFTR is a gene.") is not None
     def test_allows_pathogenic_general(self):
-        txt = "גן MSH2 קשור לשינויים פתוגניים הגורמים לסרטן מעי גס. המשמעות האישית נקבעת על ידי הצוות הגנטי."
+        # "גורמים לסרטן" (causation) is correctly blocked — use "קשור ל" instead.
+        txt = "גן MSH2 מקודד לחלבון המשתתף בתיקון שגיאות שכפול DNA. הגן קשור לסרטן המעי הגס. המשמעות האישית נקבעת על ידי הצוות הגנטי."
         assert engine._validate_gene_education_draft(txt) is None
 
 

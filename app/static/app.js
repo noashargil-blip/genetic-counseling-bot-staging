@@ -6,7 +6,6 @@
 let messages = [];
 let isSending = false;
 let lastTopic = null;
-let lastGeneSymbol = null;
 
 const CONTEXT_WINDOW = 6;
 
@@ -162,7 +161,6 @@ async function sendQuestion(question, topic) {
 
   const conversationContext = buildConversationContext();
   const lastTopicForThisTurn = lastTopic;
-  const lastGeneSymbolForThisTurn = lastGeneSymbol;
 
   addMessage('user', question);
   const pendingId = addMessage('bot-pending', PENDING_TEXT_HE);
@@ -176,7 +174,6 @@ async function sendQuestion(question, topic) {
         topic: topic || undefined,
         conversation_context: conversationContext.length ? conversationContext : undefined,
         last_topic: lastTopicForThisTurn || undefined,
-        last_gene_symbol: lastGeneSymbolForThisTurn || undefined,
       }),
     });
 
@@ -214,9 +211,6 @@ async function sendQuestion(question, topic) {
       }
     }
     lastTopic = data.matched_topic || lastTopic;
-    if (data.gene_metadata && data.gene_metadata.gene_symbol) {
-      lastGeneSymbol = data.gene_metadata.gene_symbol;
-    }
   } catch (err) {
     const msg = 'לא ניתן היה להתחבר לשרת. בדקי את החיבור לאינטרנט ונסי שוב.';
     replaceMessage(pendingId, 'bot', msg, 'out_of_scope', [], null, null, false, true);

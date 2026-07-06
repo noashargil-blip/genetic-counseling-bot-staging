@@ -85,8 +85,7 @@ _GENE_PATTERNS = [
 VUS_KNOWN_GENE_TEMPLATE_HE = (
     "כאשר מתקבל VUS בגן {gene}, המשמעות היא שזוהה שינוי גנטי, אך עדיין "
     "אין מספיק ראיות מדעיות כדי לקבוע אם הוא pathogenic או benign. "
-    "לכן אין להסיק מסקנות אישיות או לקבל החלטות רפואיות רק על סמך VUS. "
-    "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
+    "לכן אין להסיק מסקנות אישיות או לקבל החלטות רפואיות רק על סמך VUS."
 )
 
 
@@ -214,13 +213,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             parts.append(gene_note)
 
     # ClinVar stats go to gene_metadata only — not the main answer text.
-    # Stats in the answer text are replaced by a brief reference note for Tier-1a.
     g_summary = gene_index.get_gene_summary(gene) if gene_index._GENE_INDEX_AVAILABLE else None  # noqa: F821
-    if curated and g_summary:
-        parts.append("קיימים נתונים טכניים נוספים על הגן בכרטיס הגנטי המורחב.")
-
-    # Short general disclaimer — no automatic team referral for routine VUS education
-    parts.append("המידע כללי ואינו מחליף ייעוץ רפואי אישי.")
 
     entry = kb.get_by_id("vus_known_gene")
     suggested = list(entry.get("suggested_questions", [])) if entry else list(_GENE_SUGGESTED_QUESTIONS)  # noqa: F821
@@ -1016,11 +1009,6 @@ _GENE_QUESTION_PHRASES: frozenset[str] = frozenset([
     "clinical conditions",
 ])
 
-# Hebrew safety note appended to gene-level answers.
-_GENE_SUMMARY_SAFETY_NOTE_HE = (
-    "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
-)
-
 # Phrases that signal the user is asking about "the mutation" (singular) of a gene.
 # These trigger a preamble explaining that a gene can have many different variants.
 _MUTATION_SPECIFIC_PHRASES: frozenset[str] = frozenset([
@@ -1227,8 +1215,21 @@ _GENE_SUGGESTED_QUESTIONS = [
     "מה ההבדל בין VUS לבין ממצא pathogenic?",
     "האם VUS יכול להשתנות בעתיד?",
     "למה בדרך כלל לא מקבלים החלטות רפואיות רק לפי VUS?",
-    "מה זה ממצא pathogenic?",
 ]
+
+# Shown for non-VUS gene questions (general biological curiosity)
+_GENE_SUGGESTED_QUESTIONS_GENERAL = [
+    "מה ההבדל בין VUS לבין ממצא pathogenic?",
+    "האם ממצא בגן יכול להשתנות בסיווגו לאורך זמן?",
+    "מה כדאי לשאול את הגנטיקאי על ממצא בגן?",
+]
+
+
+def _gene_suggested_questions(question: str, gene: str) -> list:
+    """VUS questions when question asks about VUS; general questions otherwise."""
+    if _mentions_vus(question):
+        return [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
+    return list(_GENE_SUGGESTED_QUESTIONS_GENERAL)
 
 # ---------------------------------------------------------------------------
 # Intro-only LLM system
@@ -2040,8 +2041,6 @@ _GENERAL_EDUCATION_SYSTEM_PROMPT = (
     "  - Personal risk estimates or 'you should...' instructions\n"
     "  - Urgent clinical instructions\n"
     "  - Question marks, emoji, or ClinVar statistics\n\n"
-    "SAFETY: End with ONE concise sentence when relevant:\n"
-    "  'אם השאלה נוגעת לתוצאה האישית שלך, יש לפנות לצוות הגנטי.'\n\n"
     "FORMAT:\n"
     "  - Hebrew mainly; English biomedical terms allowed.\n"
     "  - 2-5 short sentences. Maximum 500 characters.\n"
@@ -2055,8 +2054,6 @@ _GENERAL_EDUCATION_RETRY_SYSTEM_PROMPT = (
     "  - Hebrew ONLY for main text; English technical terms allowed.\n"
     "  - Do NOT mention 'יש לך', 'אצלך', 'הסיכון שלך'.\n"
     "  - Do NOT diagnose, recommend treatment, or estimate risk.\n"
-    "  - When relevant end with: "
-    "'אם השאלה נוגעת לתוצאה האישית שלך, יש לפנות לצוות הגנטי.'\n"
     "  - No question marks, emoji, or disclaimers.\n"
     "  - Maximum 600 characters.\n"
     "  - Output ONLY the sentences."
@@ -2860,8 +2857,6 @@ def _build_gene_clinvar_deterministic_answer(gene: str, summary: dict) -> str:
         if len(clean_phenotypes) > 8:
             lines.append(f"(ועוד {len(clean_phenotypes) - 8} מצבים נוספים במאגר)")
 
-    lines.append("")
-    lines.append(_GENE_SUMMARY_SAFETY_NOTE_HE)
     return "\n".join(lines)
 
 
@@ -2927,19 +2922,18 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         card_summary = gene_cards.get_approved_summary(gene)
         if card_summary:
             # Tier 1a (gene_cards card only — no ClinVar stats available).
-            safety_note = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
             preamble_1a = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
-            det = preamble_1a + card_summary + safety_note
+            det = preamble_1a + card_summary
             return {
                 "answer": det,
                 "safety_level": "general_information",
                 "needs_genetic_counselor": False,
                 "matched_topic": "gene_clinvar_summary",
-                "suggested_questions": list(_GENE_SUGGESTED_QUESTIONS),
+                "suggested_questions": _gene_suggested_questions(question, gene),
                 "llm_used": False,
                 "fallback_used": True,
                 "llm_mode": "none",
-                    "gene_metadata": {
+                "gene_metadata": {
                     "gene_symbol": gene,
                     "data_source": "Curated educational content",
                     "llm_used": False,
@@ -2955,23 +2949,21 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         gk_patient = gene_knowledge.get_gene_patient_summary(gene)
         gk_vus = gene_knowledge.get_gene_vus_note(gene)
         if gk_patient:
-            safety_note = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
             preamble_1b = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
             parts_1b = [preamble_1b + gk_patient]
-            if gk_vus and _mentions_vus(question):  # VUS note only when question asks about VUS
+            if gk_vus and _mentions_vus(question):
                 parts_1b.append(gk_vus)
-            det = "\n\n".join(parts_1b) + safety_note
-            suggested_1b = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
+            det = "\n\n".join(parts_1b)
             return {
                 "answer": det,
                 "safety_level": "general_information",
                 "needs_genetic_counselor": False,
                 "matched_topic": "gene_clinvar_summary",
-                "suggested_questions": suggested_1b,
+                "suggested_questions": _gene_suggested_questions(question, gene),
                 "llm_used": False,
                 "fallback_used": True,
                 "llm_mode": "none",
-                    "gene_metadata": {
+                "gene_metadata": {
                     "gene_symbol": gene,
                     "data_source": "Gene Knowledge Base",
                     "llm_used": False,
@@ -2984,22 +2976,16 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
                 },
             }
         # Tier 3: gene not in any approved source and not in local ClinVar index.
-        # Phrased to avoid implying the gene does not exist globally.
         _correction_note_t3 = (
             f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
             if corrected_from else ""
         )
         return {
-            "answer": (
-                _correction_note_t3 +
-                f"הגן {gene} אינו כלול במאגר המידע המקומי שעליו מתבסס הצ'אט. "
-                "ייתכן שהמאגר המקומי טרם עודכן עם נתונים עבור גן זה. "
-                "לבירור המדויק — פנה/י לצוות הגנטי."
-            ),
+            "answer": _correction_note_t3 + f"אין עדיין מידע על הגן {gene} במאגר המקומי.",
             "safety_level": "general_information",
-            "needs_genetic_counselor": True,
+            "needs_genetic_counselor": False,
             "matched_topic": "gene_clinvar_summary",
-            "suggested_questions": list(_GENE_SUGGESTED_QUESTIONS),
+            "suggested_questions": _gene_suggested_questions(question, gene),
             "llm_used": False,
             "fallback_used": True,
             "gene_metadata": {
@@ -3020,19 +3006,15 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     curated = gene_cards.get_approved_summary(gene)
     if curated:
         # Tier 1a: approved gene card — curated patient education.
-        # ClinVar stats go to gene_metadata only; main answer gets a brief reference note.
+        # ClinVar stats go to gene_metadata only (no ClinVar dump in main answer).
         preamble = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
         det = preamble + curated
-        if summary:
-            det += "\n\nקיימים נתונים טכניים נוספים על הגן בכרטיס הגנטי המורחב."
-        det += "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
-        suggested = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
         return {
             "answer": det,
             "safety_level": "general_information",
             "needs_genetic_counselor": False,
             "matched_topic": "gene_clinvar_summary",
-            "suggested_questions": suggested,
+            "suggested_questions": _gene_suggested_questions(question, gene),
             "llm_used": False,
             "fallback_used": True,
             "llm_mode": "none",
@@ -3055,19 +3037,17 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     gk_patient_ci = gene_knowledge.get_gene_patient_summary(gene)
     gk_vus_ci = gene_knowledge.get_gene_vus_note(gene)
     if gk_patient_ci:
-        safety_note_ci = "\n\nהמידע כללי ואינו מחליף ייעוץ רפואי אישי."
         preamble_ci = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
         parts_ci = [preamble_ci + gk_patient_ci]
-        if gk_vus_ci and _mentions_vus(question):  # VUS note only when question asks about VUS
+        if gk_vus_ci and _mentions_vus(question):
             parts_ci.append(gk_vus_ci)
-        det_ci = "\n\n".join(parts_ci) + safety_note_ci
-        suggested_ci = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
+        det_ci = "\n\n".join(parts_ci)
         return {
             "answer": det_ci,
             "safety_level": "general_information",
             "needs_genetic_counselor": False,
             "matched_topic": "gene_clinvar_summary",
-            "suggested_questions": suggested_ci,
+            "suggested_questions": _gene_suggested_questions(question, gene),
             "llm_used": False,
             "fallback_used": True,
             "llm_mode": "none",
@@ -3096,10 +3076,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     )
     tier2_fallback_answer = (
         _correction_prefix_t2 +
-        f"מצאתי את הגן {gene} במאגר ClinVar, אך אין עדיין סיכום ביולוגי מאושר בעברית עבורו. "
-        "לפרטים נוספים — פנה/י לצוות הגנטי."
+        f"אין עדיין סיכום עברי מאושר לגן {gene} במערכת."
     )
-    suggested = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
+    suggested = _gene_suggested_questions(question, gene)
     _draft_debug: dict = {}
     unverified_draft = _generate_unverified_gene_draft(
         gene, question, clinvar_context=summary, use_lenient_validator=True,
@@ -3638,7 +3617,6 @@ def answer_question(
     conversation_context: Optional[list] = None,
     last_topic: Optional[str] = None,
     include_unverified_gene_draft: bool = False,
-    last_gene_symbol: Optional[str] = None,
 ) -> dict:
     """
     Build the full response for POST /ask.
@@ -3657,7 +3635,10 @@ def answer_question(
     # classify_question_intent() runs ALL safety and routing checks once.
     # Its result drives routing for steps A–F below.
     # Steps 5–7 (KB follow-up, KB lookup, fallback) run after intent routing.
-    intent_info = classify_question_intent(text, last_gene_symbol=last_gene_symbol, topic=topic)
+    # last_gene_symbol is intentionally NOT passed — context bleed prevention.
+    # Gene follow-up routing via prior context is disabled; every question is
+    # classified on its own text only.
+    intent_info = classify_question_intent(text, last_gene_symbol=None, topic=topic)
     intent = intent_info["intent"]
 
     # A. Privacy identifiers — block, never reach LLM/KB/ClinVar.
