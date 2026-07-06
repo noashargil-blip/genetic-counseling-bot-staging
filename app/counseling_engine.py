@@ -3087,18 +3087,17 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         }
 
     # Tier 2: no approved gene card or knowledge base record, but gene is in ClinVar index.
-    # Main answer: short patient-friendly message ONLY — no raw ClinVar dump.
+    # Function-first: use the AI-generated draft as the MAIN answer when available.
     # ClinVar details (significance_breakdown, top_phenotypes) remain in
     # gene_metadata for the collapsed technical UI card.
     _correction_prefix_t2 = (
         f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
         if corrected_from else ""
     )
-    tier2_answer = (
+    tier2_fallback_answer = (
         _correction_prefix_t2 +
-        f"מצאתי את הגן {gene} במאגר ClinVar, אך אין עדיין סיכום ביולוגי מאושר בעברית עבורו.\n\n"
-        "המידע כללי בלבד ואינו מפרש תוצאה אישית. "
-        "לפרשנות אישית יש לפנות לצוות הגנטי."
+        f"מצאתי את הגן {gene} במאגר ClinVar, אך אין עדיין סיכום ביולוגי מאושר בעברית עבורו. "
+        "לפרטים נוספים — פנה/י לצוות הגנטי."
     )
     suggested = [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
     _draft_debug: dict = {}
@@ -3107,20 +3106,29 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         _debug=_draft_debug,
     )
     draft_available = unverified_draft is not None
+
+    # Function-first: when the draft passed validation, use its text as the main
+    # answer. The safety note is already embedded by the prompt ("המשמעות האישית...").
+    # The bland "found in ClinVar but no summary" message is the fallback only.
+    if draft_available and unverified_draft:
+        main_answer = _correction_prefix_t2 + unverified_draft.get("text_he", tier2_fallback_answer)
+    else:
+        main_answer = tier2_fallback_answer
+
     result: dict = {
-        "answer": tier2_answer,
+        "answer": main_answer,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
         "matched_topic": "gene_clinvar_summary",
         "suggested_questions": suggested,
         "llm_used": draft_available,
-        "fallback_used": True,
+        "fallback_used": not draft_available,
         "llm_mode": "draft_openai" if draft_available else "none",
         "gene_metadata": {
             "gene_symbol": gene,
             "data_source": "ClinVar (NCBI) via local gene index",
             "llm_used": draft_available,
-            "fallback_used": True,
+            "fallback_used": not draft_available,
             "total_variants": summary.get("total_variants"),
             "found_in_index": True,
             "answer_tier": "tier2",
@@ -3492,6 +3500,135 @@ def _call_local_llm(question: str, entry: dict, conversation_context: Optional[l
 
 
 # ---------------------------------------------------------------------------
+# Intent classification — single routing pass
+# ---------------------------------------------------------------------------
+
+# Explicit Hebrew pronouns / possessives that signal "this question is about
+# the entity mentioned in the PREVIOUS turn."
+# Standalone questions like "מה זה המוגלובין?" must NEVER contain these.
+# Follow-up questions like "מה התפקיד שלו?" MUST contain at least one.
+_GENE_FOLLOWUP_PRONOUN_SIGNALS: frozenset[str] = frozenset([
+    "שלו",           # "מה התפקיד שלו?"
+    "אליו",          # "קשור אליו"
+    "בו",            # "מה קורה בו?"
+    "לגביו",         # "ומה לגביו?"
+    "עליו",          # "מה אפשר לדעת עליו?"
+    "ממנו",          # "שמעת ממנו?"
+    "הוא קשור",      # "לאיזה מצבים הוא קשור?"
+    "הוא מקושר",
+    "הוא עושה",      # "מה הוא עושה?"
+    "הוא מייצר",
+    "הוא ממוקם",
+    "תפקידו",        # "מה תפקידו?"
+    "הקשר אליו",
+    "המשמעות שלו",
+    "התפקיד שלו",
+    "הקשר שלו",
+    "לאיזה מצבים הוא",
+    "לאיזה מחלות הוא",
+    "מה הוא עשוי",
+])
+
+
+def _has_gene_followup_signal(text: str) -> bool:
+    """
+    Return True ONLY when text has explicit pronoun/possessive signals that
+    indicate the question is a follow-up about a previously mentioned gene.
+
+    Conservative by design — ambiguous questions fall through to general
+    concept handling, NOT to the previous gene.
+
+    Examples:
+      "מה התפקיד שלו?"     → True  (possessive "שלו")
+      "לאיזה מצבים הוא קשור?" → True  (pronoun reference "הוא קשור")
+      "מה זה המוגלובין?"   → False (standalone concept)
+      "מה זה כרומוזום?"    → False (standalone concept)
+      "מה זה אלצהיימר?"    → False (standalone concept)
+    """
+    lower = text.strip().lower()
+    return any(sig in lower for sig in _GENE_FOLLOWUP_PRONOUN_SIGNALS)
+
+
+def classify_question_intent(
+    question: str,
+    last_gene_symbol: Optional[str] = None,
+    topic: Optional[str] = None,
+) -> dict:
+    """
+    Single-pass intent router for answer_question.
+
+    Routing priority (first match wins):
+      A. privacy_identifier   — identifying info detected
+      B. reproductive_block   — abortion / pregnancy termination decision
+      C. specific_variant     — named variant (HGVS/rsID) — gets evidence summary
+      D. personal_high_stakes — personal medical interpretation / action request
+      E. explicit_gene_question — gene symbol found in the CURRENT text
+      F. gene_followup        — pronoun signals + last_gene_symbol present
+      G. unclear              — fall through to KB → AI fallback → helpful fallback
+
+    Returns:
+      {
+        "intent":      str,
+        "gene_symbol": Optional[str],  # gene to route to (from text or context)
+        "reason":      str,            # human-readable explanation
+      }
+
+    NOTE: step F (gene_followup) requires BOTH:
+      - last_gene_symbol is set (previous turn had a gene answer)
+      - _has_gene_followup_signal(text) is True (pronoun/possessive present)
+    Standalone concept questions ("מה זה המוגלובין?", "מה זה כרומוזום?") will
+    never reach step F even if last_gene_symbol is set.
+    """
+    text = question.strip()
+
+    # A. Privacy identifiers — block before any other logic
+    if safety.contains_identifying_info(text):
+        return {"intent": "privacy_identifier", "gene_symbol": None,
+                "reason": "identifying_info_detected"}
+
+    # B. Reproductive / abortion decision — irreversible, special boundary
+    if _is_reproductive_decision_question(text):
+        return {"intent": "reproductive_block", "gene_symbol": None,
+                "reason": "reproductive_decision_question"}
+
+    # C. Specific named variant (HGVS / rsID) — evidence summary, not refused
+    if safety.contains_specific_variant(text):
+        return {"intent": "specific_variant", "gene_symbol": None,
+                "reason": "specific_variant_in_text"}
+
+    # D. Personal medical interpretation / action request
+    if safety.is_personal_interpretation_request(text):
+        return {"intent": "personal_high_stakes", "gene_symbol": None,
+                "reason": "personal_interpretation_request"}
+
+    # E. Explicit gene symbol in the CURRENT question text
+    if not topic:
+        gene_in_text: Optional[str] = None
+        corrected_from_ci: Optional[str] = None
+        if gene_index._GENE_INDEX_AVAILABLE:
+            gene_in_text, corrected_from_ci = _extract_gene_with_correction(text)
+        if gene_in_text is None:
+            gene_in_text = _detect_known_gene(text)
+        if gene_in_text and (
+            _is_gene_level_question(text)
+            or _is_standalone_gene_query(text, gene_in_text)
+            or _mentions_vus(text)
+        ):
+            return {"intent": "explicit_gene_question", "gene_symbol": gene_in_text,
+                    "reason": "gene_symbol_in_text",
+                    "_corrected_from": corrected_from_ci}
+
+    # F. Gene follow-up — REQUIRES explicit pronoun/possessive signal.
+    #    "מה זה המוגלובין?" and "מה זה כרומוזום?" must NEVER reach here.
+    if last_gene_symbol and not topic and _has_gene_followup_signal(text):
+        return {"intent": "gene_followup", "gene_symbol": last_gene_symbol,
+                "reason": "pronoun_followup_with_prior_gene"}
+
+    # G. No strong signal — fall through to KB / AI fallback
+    return {"intent": "unclear", "gene_symbol": None, "reason": "no_specific_match"}
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -3516,9 +3653,15 @@ def answer_question(
     text = (question or "").strip()
     safe_context = _sanitize_context(conversation_context)
 
-    # 1. Identifying information — block before anything else, never sent
-    #    to the LLM, the KB, or the ClinVar retriever.
-    if safety.contains_identifying_info(text):
+    # ── Single intent classification pass ─────────────────────────────────
+    # classify_question_intent() runs ALL safety and routing checks once.
+    # Its result drives routing for steps A–F below.
+    # Steps 5–7 (KB follow-up, KB lookup, fallback) run after intent routing.
+    intent_info = classify_question_intent(text, last_gene_symbol=last_gene_symbol, topic=topic)
+    intent = intent_info["intent"]
+
+    # A. Privacy identifiers — block, never reach LLM/KB/ClinVar.
+    if intent == "privacy_identifier":
         return {
             "answer": PRIVACY_WARNING_HE,
             "safety_level": "contains_identifying_info",
@@ -3529,11 +3672,9 @@ def answer_question(
             "fallback_used": False,
         }
 
-    # 1.5. Reproductive / abortion decision intent — detected before everything
-    #      else because a VUS finding alone is not a basis for an irreversible
-    #      decision.  Fires even when the question also contains a gene name
-    #      or specific variant, so the safety message is never skipped.
-    if _is_reproductive_decision_question(text):
+    # B. Reproductive / abortion decision — irreversible; always fires even when
+    #    the question also contains a gene name or specific variant.
+    if intent == "reproductive_block":
         return {
             "answer": REPRODUCTIVE_DECISION_HE,
             "safety_level": "requires_genetic_counselor",
@@ -3544,16 +3685,13 @@ def answer_question(
             "fallback_used": False,
         }
 
-    # 2. Specific-variant evidence summary — a named variant (HGVS notation
-    #    or rsID) is handled BEFORE the generic personal-interpretation
-    #    check: naming a variant is not refused outright, it gets a general
-    #    evidence summary plus a clear safety boundary.
-    if safety.contains_specific_variant(text):
+    # C. Specific named variant (HGVS / rsID) — educational evidence summary,
+    #    not refused outright; runs before personal-interpretation check.
+    if intent == "specific_variant":
         return _build_variant_evidence_answer(text)
 
-    # 3. Personal medical interpretation / action request (no specific
-    #    variant named) — fixed redirect, no KB/LLM/ClinVar lookup.
-    if safety.is_personal_interpretation_request(text):
+    # D. Personal medical interpretation / action request — redirect to counselor.
+    if intent == "personal_high_stakes":
         return {
             "answer": PERSONAL_REDIRECT_HE,
             "safety_level": "requires_genetic_counselor",
@@ -3564,67 +3702,37 @@ def answer_question(
             "fallback_used": False,
         }
 
-    # 4. Gene-name + VUS handling — only for free-text questions (no explicit
-    #    topic hint from the UI).  Also detects genes found in the live gene
-    #    index (e.g. HBB, SOX1) beyond the typo-tolerant _GENE_PATTERNS set.
-    if not topic and _mentions_vus(text):
-        gene = _detect_known_gene(text)
-        if gene is None:
-            if gene_index._GENE_INDEX_AVAILABLE:
-                gene, _ = _extract_gene_with_correction(text)
-        if gene:
+    # E/F. Gene routing — explicit gene in text, or confirmed follow-up with pronoun.
+    #
+    # CRITICAL: last_gene_symbol is used ONLY when intent == "gene_followup",
+    # which requires _has_gene_followup_signal() to be True (explicit pronoun/
+    # possessive present). Standalone concept questions ("מה זה המוגלובין?",
+    # "מה זה כרומוזום?") never reach here even when last_gene_symbol is set.
+    if intent in ("explicit_gene_question", "gene_followup"):
+        gene_for_routing = intent_info["gene_symbol"]
+        corrected_from = intent_info.get("_corrected_from")
+
+        # VUS + explicit gene → enriched VUS answer
+        if intent == "explicit_gene_question" and _mentions_vus(text):
             return _build_known_gene_answer(
-                gene, question=text,
+                gene_for_routing, question=text,
                 include_unverified_gene_draft=True,
             )
 
-    # 4.5. Gene-level question — ClinVar stats (when index available) or curated
-    #      educational fallback (when index is down but gene is in _GENE_PATTERNS).
-    #      Must run BEFORE step 5 so "מה המשמעות של הגן APC" is not swallowed by the
-    #      follow-up detector even when there is prior VUS context.
-    #      Also detects standalone gene symbol input ("CFTR" alone, "בCFTR")
-    #      and fuzzy-corrected typos ("XFTR" → CFTR).
-    _gene_found_in_text: Optional[str] = None  # track for 4.5b below
-    if not topic:
+        # Gene-level question → ClinVar / curated / function-first answer
         if gene_index._GENE_INDEX_AVAILABLE:
-            gene_candidate, corrected_from = _extract_gene_with_correction(text)
-            _gene_found_in_text = gene_candidate
-            if gene_candidate and (
-                _is_gene_level_question(text)
-                or _is_standalone_gene_query(text, gene_candidate)
-            ):
-                result = _build_gene_clinvar_answer(
-                    text, gene_candidate,
-                    include_unverified_gene_draft=True,
-                    corrected_from=corrected_from,
-                )
-                if result is not None:
-                    return result
-        else:
-            # Index unavailable: pattern-based detection + educational fallback.
-            gene_candidate = _detect_known_gene(text)
-            _gene_found_in_text = gene_candidate
-            if gene_candidate and (
-                _is_gene_level_question(text)
-                or _is_standalone_gene_query(text, gene_candidate)
-            ):
-                return _build_gene_education_fallback(gene_candidate)
-
-    # 4.5b. Gene follow-up with context: if the question is gene-level but no gene
-    #       was found in the current text, route to the gene from the previous turn.
-    if (
-        not topic
-        and last_gene_symbol
-        and not _gene_found_in_text
-        and _is_gene_level_question(text)
-        and gene_index._GENE_INDEX_AVAILABLE
-    ):
-        result = _build_gene_clinvar_answer(
-            text, last_gene_symbol,
-            include_unverified_gene_draft=True,
-        )
-        if result is not None:
-            return result
+            result = _build_gene_clinvar_answer(
+                text, gene_for_routing,
+                include_unverified_gene_draft=True,
+                corrected_from=corrected_from,
+            )
+            if result is not None:
+                return result
+        elif intent == "explicit_gene_question":
+            # Gene index unavailable: use pattern-based educational fallback.
+            known = _detect_known_gene(text)
+            if known:
+                return _build_gene_education_fallback(known)
 
     # 5. Follow-up handling — vague continuation phrases resolved via
     #    last_topic / sanitized conversation context, not KB keyword scoring.
