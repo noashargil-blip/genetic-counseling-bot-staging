@@ -378,8 +378,8 @@ def _is_reproductive_decision_question(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _FALLBACK_PREFIX_HE = (
-    "אני יכול/ה לענות רק על בסיס מידע כללי שאושר מראש, ולא לקבוע משמעות "
-    "אישית או לפרש ממצא ספציפי."
+    "אני כאן כדי להסביר מושגים גנטיים כלליים — כמו VUS, נשאות, תורשה, וסיווג ממצאים. "
+    "לפרשנות של ממצא ספציפי יש לפנות לצוות הגנטי שמכיר את הפרטים האישיים."
 )
 
 
@@ -1231,6 +1231,151 @@ def _gene_suggested_questions(question: str, gene: str) -> list:
         return [q.replace("בגן זה", f"ב-{gene}") for q in _GENE_SUGGESTED_QUESTIONS]
     return list(_GENE_SUGGESTED_QUESTIONS_GENERAL)
 
+
+# ---------------------------------------------------------------------------
+# Trisomy 21 / Down syndrome educational answer
+# ---------------------------------------------------------------------------
+
+_TRISOMY21_SIGNALS_RE = re.compile(
+    r"טריזומי[הא]\s*21|trisomy\s*21"
+    r"|כרומוזום\s*21\s*(?:עודף|נוסף|יותר)"
+    r"|כרומוזום\s+עודף\s*21"
+    r"|תסמונת\s+דאון|סינדרום\s+דאון|down\s*syndrome",
+    re.IGNORECASE,
+)
+
+_TRISOMY21_EDUCATIONAL_HE = (
+    "טריזומיה 21 (Trisomy 21) היא מצב גנטי שבו בתאי הגוף יש שלושה עותקים של כרומוזום 21 "
+    "במקום שניים הרגילים. זהו הבסיס הגנטי של תסמונת דאון (Down syndrome).\n\n"
+    "ברוב המקרים, כרומוזום 21 הנוסף מופיע כתוצאה מאי-הפרדה תקינה של כרומוזומים "
+    "בתא הביצה (non-disjunction). בחלק קטן מהמקרים קיימת צורת פסיפס (מוזאיקה) — "
+    "שם חלק מהתאים בלבד מכילים שלושה כרומוזומים 21.\n\n"
+    "מבחינה קלינית, התסמונת קשורה למנעד רחב של ביטויים: רמות שונות של השפעה על "
+    "ההתפתחות, מאפיינים גופניים מסוימים, ולעיתים ממצאים נוספים במערכות שונות כגון "
+    "לב ומעיים. ביטויי התסמונת שונים מאדם לאדם. "
+    "האבחנה מאושרת בדרך כלל על ידי בדיקת קריוטיפ (בדיקת כרומוזומים)."
+)
+
+
+def _detect_trisomy21(text: str) -> bool:
+    """True when the question contains trisomy 21 / Down syndrome signals."""
+    return bool(_TRISOMY21_SIGNALS_RE.search(text))
+
+
+def _build_trisomy21_answer() -> dict:
+    return {
+        "answer": _TRISOMY21_EDUCATIONAL_HE,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": "trisomy21",
+        "suggested_questions": [
+            "מה ההבדל בין טריזומיה 21 לבין פסיפס (מוזאיקה)?",
+            "האם טריזומיה 21 ניתן לאבחן לפני הלידה?",
+            "מה כדאי לשאול את הצוות הגנטי על טריזומיה 21?",
+        ],
+        "llm_used": False,
+        "fallback_used": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# VUS options — practical patient answer for "what are my options?" + VUS
+# ---------------------------------------------------------------------------
+
+_VUS_OPTIONS_KEYWORDS = frozenset([
+    "אפשרויות",
+    "מה לעשות",
+    "מה עושים",
+    "מה כדאי לעשות",
+    "מה הצעדים",
+    "מה עלי לעשות",
+    "מה ניתן לעשות",
+    "מה אפשר לעשות",
+    "next steps",
+    "what can i do",
+    "what are my options",
+])
+
+_VUS_OPTIONS_HE = (
+    "כשמתקבל VUS, יש כמה דברים שכדאי לדעת:\n\n"
+    "1. VUS אינו שקול לממצא pathogenic — הוא לא אישור למחלה ולא ממצא תקין לחלוטין. "
+    "פשוט אין עדיין מספיק ראיות מדעיות לסיווג ברור.\n\n"
+    "2. בדרך כלל לא מקבלים החלטות רפואיות משמעותיות רק על בסיס VUS — הצוות הגנטי "
+    "מתייחס לתמונה הקלינית המלאה.\n\n"
+    "3. חשוב לשמור תיעוד של הממצא — סיווג VUS יכול להתעדכן בעתיד ככל שמצטברות "
+    "ראיות מדעיות חדשות, ולכן כדאי לשמור קשר עם הצוות הגנטי.\n\n"
+    "4. לעיתים, בדיקת קרובי משפחה יכולה לתרום לסיווג מדויק יותר — זה נקרא בדיקת "
+    "segregation.\n\n"
+    "5. אפשר לשאול את הצוות הגנטי: האם קיימת תוכנית מעקב? האם הסיווג צפוי להתעדכן?"
+)
+
+
+def _is_vus_options_request(text: str) -> bool:
+    """True when text asks for practical options/steps in the context of VUS."""
+    lower = text.lower()
+    return any(kw in lower for kw in _VUS_OPTIONS_KEYWORDS)
+
+
+def _build_vus_options_answer(gene: Optional[str] = None) -> dict:
+    gene_prefix = f"לגבי VUS בגן {gene}:\n\n" if gene else ""
+    return {
+        "answer": gene_prefix + _VUS_OPTIONS_HE,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": "vus_known_gene",
+        "suggested_questions": list(_GENE_SUGGESTED_QUESTIONS),
+        "llm_used": False,
+        "fallback_used": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Educational personal context detection
+# ---------------------------------------------------------------------------
+
+_EDUCATIONAL_PERSONAL_PHRASES: tuple = (
+    "אמרו לי",
+    "אמרה לי",
+    "אמר לי",
+    "הרופא אמר",
+    "הרופאה אמרה",
+    "הצוות אמר",
+    "הגנטיקאי אמר",
+    "הגנטיקאית אמרה",
+    "נמצא אצלי",
+    "נמצאה אצלי",
+    "נמצא אצלנו",
+    "לתינוק שלי",
+    "לילד שלי",
+    "לילדה שלי",
+    "לבן שלי",
+    "לבת שלי",
+)
+
+_EDUCATIONAL_PERSONAL_DECISION_BLOCK: tuple = (
+    "ניתוח",
+    "כריתה",
+    "כימותרפיה",
+    "הפלה",
+    "מה הסיכון שלי",
+    "כמה אחוז",
+    "כמה סיכוי",
+    "מה הסיכוי שלי",
+    "האם יהיה לי",
+    "האם יהיו לי",
+)
+
+
+def _is_educational_personal_context(text: str) -> bool:
+    """True when text has personal educational phrasing without decision/risk seeking."""
+    lower = text.lower()
+    has_personal = any(phrase in lower for phrase in _EDUCATIONAL_PERSONAL_PHRASES)
+    if not has_personal:
+        return False
+    has_decision = any(phrase in lower for phrase in _EDUCATIONAL_PERSONAL_DECISION_BLOCK)
+    return not has_decision
+
+
 # ---------------------------------------------------------------------------
 # Intro-only LLM system
 # ---------------------------------------------------------------------------
@@ -1976,11 +2121,12 @@ _GENERAL_EDU_INTENT_PHRASES: tuple = (
 
 # Additional personal / high-stakes signals NOT caught by safety.py step 3.
 # Block the general AI fallback when any of these appear.
+# NOTE: "שלי" and "אצלי" were intentionally removed — they are too broad and
+# block legitimate educational questions ("לתינוק שלי", "נמצא אצלי VUS").
 _GENERAL_EDU_EXTRA_BLOCK_PHRASES: tuple = (
     "יהיה לי",
     "יהיו לי",
     "יהיו לך",
-    "אצלי",
     "הממצא שלי",
     "התוצאה שלי",
     "הבדיקה שלי",
@@ -1994,7 +2140,6 @@ _GENERAL_EDU_EXTRA_BLOCK_PHRASES: tuple = (
     "כדאי לי",
     "כדאי לך",
     "מומלץ לי",
-    "שלי",
 )
 
 
@@ -3151,12 +3296,8 @@ def _build_gene_education_fallback(gene: str) -> dict:
         or gene_knowledge.get_gene_patient_summary(gene)
         or _GENE_EDUCATION_FALLBACK_HE.format(gene=gene)
     )
-    safety_note = (
-        "\n\nחשוב לדעת: מידע זה כללי בלבד ואינו פרשנות של הממצא האישי שלך. "
-        "לפרשנות מדויקת — יש לפנות לצוות הגנטי שטיפל בך."
-    )
     return {
-        "answer": body + safety_note,
+        "answer": body,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
         "matched_topic": "gene_info",
@@ -3570,10 +3711,22 @@ def classify_question_intent(
         return {"intent": "reproductive_block", "gene_symbol": None,
                 "reason": "reproductive_decision_question"}
 
+    # B.5. Trisomy 21 / Down syndrome — educational; fires before personal block
+    if _detect_trisomy21(text):
+        return {"intent": "trisomy21_education", "gene_symbol": None,
+                "reason": "trisomy21_signals_in_text"}
+
     # C. Specific named variant (HGVS / rsID) — evidence summary, not refused
     if safety.contains_specific_variant(text):
         return {"intent": "specific_variant", "gene_symbol": None,
                 "reason": "specific_variant_in_text"}
+
+    # C.5. Educational personal context — personal phrasing but seeking explanation.
+    # Fires BEFORE personal_high_stakes so that questions like "הרופא אמר שיש לי VUS,
+    # מה האפשרויות?" are routed to education, not blocked.
+    if _is_educational_personal_context(text):
+        return {"intent": "educational_personal_context", "gene_symbol": None,
+                "reason": "educational_personal_phrasing"}
 
     # D. Personal medical interpretation / action request
     if safety.is_personal_interpretation_request(text):
@@ -3666,10 +3819,39 @@ def answer_question(
             "fallback_used": False,
         }
 
+    # B.5. Trisomy 21 / Down syndrome educational answer.
+    if intent == "trisomy21_education":
+        return _build_trisomy21_answer()
+
     # C. Specific named variant (HGVS / rsID) — educational evidence summary,
     #    not refused outright; runs before personal-interpretation check.
     if intent == "specific_variant":
         return _build_variant_evidence_answer(text)
+
+    # C.5. Educational personal context — personal phrasing but seeking education.
+    # Extract gene + route exactly like E, then fall through to KB/AI if no gene.
+    if intent == "educational_personal_context":
+        _edu_gene: Optional[str] = None
+        _edu_corrected: Optional[str] = None
+        if gene_index._GENE_INDEX_AVAILABLE:
+            _edu_gene, _edu_corrected = _extract_gene_with_correction(text)
+        if _edu_gene is None:
+            _edu_gene = _detect_known_gene(text)
+        if _edu_gene:
+            if _mentions_vus(text):
+                if _is_vus_options_request(text):
+                    return _build_vus_options_answer(_edu_gene)
+                return _build_known_gene_answer(
+                    _edu_gene, question=text, include_unverified_gene_draft=True)
+            if gene_index._GENE_INDEX_AVAILABLE:
+                _edu_result = _build_gene_clinvar_answer(
+                    text, _edu_gene, include_unverified_gene_draft=True,
+                    corrected_from=_edu_corrected)
+                if _edu_result is not None:
+                    return _edu_result
+            else:
+                return _build_gene_education_fallback(_edu_gene)
+        # No gene found — fall through to KB / AI / fallback below.
 
     # D. Personal medical interpretation / action request — redirect to counselor.
     if intent == "personal_high_stakes":
@@ -3692,6 +3874,10 @@ def answer_question(
     if intent in ("explicit_gene_question", "gene_followup"):
         gene_for_routing = intent_info["gene_symbol"]
         corrected_from = intent_info.get("_corrected_from")
+
+        # VUS + explicit gene + options request → practical options answer
+        if intent == "explicit_gene_question" and _mentions_vus(text) and _is_vus_options_request(text):
+            return _build_vus_options_answer(gene_for_routing)
 
         # VUS + explicit gene → enriched VUS answer
         if intent == "explicit_gene_question" and _mentions_vus(text):
