@@ -203,6 +203,13 @@ async function sendQuestion(question, topic) {
         botMsg.unverifiedDraftState = 'loaded';
       }
     }
+    // General education AI draft -- auto-populated, shown immediately
+    if (data.unverified_general_draft) {
+      const botMsg = messages.find((m) => m.id === pendingId);
+      if (botMsg) {
+        botMsg.generalDraft = data.unverified_general_draft;
+      }
+    }
     lastTopic = data.matched_topic || lastTopic;
   } catch (err) {
     const msg = 'לא ניתן היה להתחבר לשרת. בדקי את החיבור לאינטרנט ונסי שוב.';
@@ -237,6 +244,7 @@ function addMessage(role, text, safetyLevel, suggestedQuestions, matchedTopic, g
     isWelcome: isWelcome || false,
     unverifiedDraft: null,
     unverifiedDraftState: null,
+    generalDraft: null,
   });
   renderMessages();
   return id;
@@ -254,6 +262,7 @@ function replaceMessage(id, role, text, safetyLevel, suggestedQuestions, matched
     if (msg.feedbackState === undefined) msg.feedbackState = null;
     if (msg.unverifiedDraft === undefined) msg.unverifiedDraft = null;
     if (msg.unverifiedDraftState === undefined) msg.unverifiedDraftState = null;
+    if (msg.generalDraft === undefined) msg.generalDraft = null;
   }
   renderMessages();
 }
@@ -398,6 +407,12 @@ function renderMessages() {
       if (!m.isWelcome) {
         const draftCard = buildUnverifiedDraftCard(m);
         if (draftCard) bubble.appendChild(draftCard);
+      }
+
+      // General education AI draft card (auto-shown when present)
+      if (!m.isWelcome) {
+        const genCard = buildGeneralDraftCard(m);
+        if (genCard) bubble.appendChild(genCard);
       }
 
       // Feedback row (skip for welcome message)
@@ -591,6 +606,49 @@ function buildUnverifiedDraftCard(msg) {
     // Do NOT show any error message here — absence of draft is silent.
   }
 
+  return card;
+}
+
+// ── General education AI draft card ───────────────────────────────────
+// Auto-shown when backend returns unverified_general_draft.
+
+function buildGeneralDraftCard(msg) {
+  if (!msg.generalDraft) return null;
+  const d = msg.generalDraft;
+
+  const card = document.createElement('div');
+  card.className = 'general-draft-card';
+
+  const details = document.createElement('details');
+  details.className = 'general-draft-details';
+  details.open = true;
+
+  const summary = document.createElement('summary');
+  summary.className = 'general-draft-summary';
+  summary.textContent = 'מידע ניסיוני לא מאומת';
+  details.appendChild(summary);
+
+  const subtitle = document.createElement('p');
+  subtitle.className = 'general-draft-subtitle';
+  subtitle.textContent = 'מידע שנוצר על ידי בינה מלאכותית — לא עבר בדיקה מקצועית ולא מהווה ייעוץ רפואי';
+  details.appendChild(subtitle);
+
+  const warning = document.createElement('p');
+  warning.className = 'general-draft-warning';
+  warning.textContent = d.warning_he || '';
+  details.appendChild(warning);
+
+  const text = document.createElement('p');
+  text.className = 'general-draft-text';
+  text.textContent = d.text_he || '';
+  details.appendChild(text);
+
+  const foot = document.createElement('p');
+  foot.className = 'general-draft-footer';
+  foot.textContent = d.source_note_he || 'מידע זה נוצר אוטומטית ולא מאושר על ידי צוות מקצועי.';
+  details.appendChild(foot);
+
+  card.appendChild(details);
   return card;
 }
 

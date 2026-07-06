@@ -95,7 +95,7 @@ def _compose_vus_practical_answer(gene: Optional[str]) -> str:
     Compose a concise, conversational Hebrew follow-up answer about VUS.
 
     Called when the user asks a vague follow-up ("מה כדאי לעשות?",
-    "מה ההשלכות?", "תסביר יותר") after an initial VUS answer — so this
+    "מה ההשלכות?", "תסביר יותר") after an initial VUS answer -- so this
     answer deliberately does NOT repeat the basic VUS definition.  Instead
     it opens practically ("בפועל...") and covers three points:
 
@@ -107,9 +107,9 @@ def _compose_vus_practical_answer(gene: Optional[str]) -> str:
 
     Safety: no diagnosis, no personal risk, no treatment recommendation,
     no statement that the variant is dangerous or benign for this user.
-    Target length: ~120–220 words, patient-friendly Hebrew.
+    Target length: ~120-220 words, patient-friendly Hebrew.
     """
-    # Paragraph 1 — practical opening, gene named once naturally
+    # Paragraph 1 -- practical opening, gene named once naturally
     if gene:
         p1 = (
             f"בפועל, VUS ב-{gene} אומר שיש ממצא שצריך לשמור בתיעוד, "
@@ -123,25 +123,23 @@ def _compose_vus_practical_answer(gene: Optional[str]) -> str:
             "לכן בדרך כלל לא מקבלים החלטות רפואיות רק על סמך VUS עצמו."
         )
 
-    # Paragraph 2 — team considerations and reclassification possibility
+    # Paragraph 2 -- team considerations and reclassification possibility
     p2 = (
         "מה שכן חשוב הוא לברר עם הצוות הגנטי האם יש משהו בתמונה הקלינית "
         "או המשפחתית שמצריך התייחסות בלי קשר ל-VUS, "
-        "והאם קיימת תוכנית לבדיקה חוזרת של הסיווג בעתיד — "
+        "והאם קיימת תוכנית לבדיקה חוזרת של הסיווג בעתיד -- "
         "סיווג VUS עשוי להשתנות ככל שמצטברות ראיות מדעיות חדשות."
     )
 
-    # Four patient-friendly questions for the genetics team — no ClinVar jargon
+    # Three patient-friendly questions for the genetics team -- no ClinVar jargon
     questions = (
-        "שאלות שאפשר לשאול את הצוות הגנטי:\n"
-        "• מה המשמעות של הגן שבו נמצא הממצא?\n"
+        "שאלות לצוות הגנטי:\n"
         "• האם יש ממצא קליני או משפחתי שמשנה את ההתייחסות?\n"
-        "• האם הסיווג צפוי להתעדכן בעתיד, ואיך אדע אם הסיווג השתנה?\n"
-        "• האם הממצא הזה אומר שיש לי מחלה, או שהמשמעות עדיין לא ידועה?"
+        "• האם הסיווג צפוי להתעדכן בעתיד?\n"
+        "• האם הממצא אומר שיש לי מחלה, או שמשמעותו עדיין לא ידועה?"
     )
 
     return "\n\n".join([p1, p2, questions])
-
 
 def _mentions_vus(text: str) -> bool:
     return bool(_VUS_TOKEN_RE.search(text)) or "וריאנט לא ידוע" in text or "משמעות לא ידועה" in text
@@ -395,7 +393,7 @@ def _build_helpful_fallback(question: str) -> dict:
             f"{topic_names}. אפשר לשאול למשל: {examples}. "
             "אם השאלה שלך נוגעת לתוצאה האישית שלך, מומלץ לפנות לצוות הגנטי שטיפל בך."
         )
-        suggested_questions = example_questions[:4]
+        suggested_questions = example_questions[:3]
     else:
         answer = (
             f"{_FALLBACK_PREFIX_HE} אין לי מידע מאושר שעונה על השאלה הזו במאגר הנוכחי. "
@@ -684,18 +682,26 @@ _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT = (
 _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT = (
     "You are a genetic counseling assistant writing a short Hebrew educational summary "
     "about a gene for a patient who just had genetic counseling in Israel.\n\n"
-    "TASK: Write 2-4 sentences in Hebrew that:\n"
-    "  1. Explain the gene general biological role.\n"
-    "  2. Mention broad medical condition categories broadly associated with this gene.\n"
-    "  3. End with: 'המשמעות של כל ממצא ספציפי נקבעת על ידי הצוות הגנטי.'\n\n"
-    "ALLOWED: Gene symbols in English, English biomedical terms (mismatch repair, "
-    "beta-globin, DNA repair), broad condition categories, the word 'pathogenic' "
-    "in a general non-personal context.\n\n"
-    "PROHIBITED: 'יש לך', 'אצלך', 'הסיכון שלך', diagnosis claims, "
-    "treatment/surgery/abortion recommendations, personal risk estimates, "
-    "question marks, emoji, ClinVar statistics.\n\n"
-    "FORMAT: Hebrew main text. Gene symbols and biomedical terms in English. "
-    "2-4 sentences. Maximum 500 characters. Output ONLY the sentences."
+    "TASK: ענה בעברית פשוטה, ב-2 עד 4 משפטים קצרים בלבד. Write concisely:\n"
+    "  1. Explain the gene's general biological role briefly.\n"
+    "  2. Mention broad medical condition categories broadly associated with changes in "
+    "this gene, if well established.\n"
+    "  3. End with ONE safety sentence: 'המשמעות של כל ממצא ספציפי נקבעת על ידי הצוות הגנטי.'\n\n"
+    "ALLOWED:\n"
+    "  - Gene symbols in English (BRCA1, CFTR, MSH2, etc.)\n"
+    "  - English biomedical terms when needed (mismatch repair, beta-globin, DNA repair)\n"
+    "  - Broad condition categories (not specific personal diagnosis)\n"
+    "  - The word 'pathogenic' in a general non-personal context\n\n"
+    "PROHIBITED:\n"
+    "  - 'יש לך', 'אצלך', 'הסיכון שלך', 'הממצא שלך', 'התוצאה שלך'\n"
+    "  - Diagnosis claims, treatment/surgery/medication recommendations\n"
+    "  - Screening recommendations for this specific user\n"
+    "  - Personal risk estimates\n"
+    "  - Question marks, emoji, or ClinVar statistics\n\n"
+    "FORMAT:\n"
+    "  - Hebrew ONLY for main text. Gene symbols and medical terms in English.\n"
+    "  - 2-4 short sentences. Maximum 450 characters.\n"
+    "  - Output ONLY the sentences. No labels, no preamble, no quotes."
 )
 
 _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT = (
@@ -1815,6 +1821,249 @@ def _ai_draft_debug_mode_active() -> bool:
         return False
     flag = os.environ.get("AI_DRAFT_DEBUG_SHOW_REJECTED", "").strip().lower()
     return flag in ("1", "true", "yes")
+
+
+
+
+# ---------------------------------------------------------------------------
+# General education AI fallback (Session 19)
+# Env: AI_GENERAL_EDUCATION_FALLBACK_ENABLED=true (default: false)
+# Only active when APP_ENV=staging or development.
+# ---------------------------------------------------------------------------
+
+def _ai_general_education_fallback_enabled() -> bool:
+    """True only in staging/development with AI_GENERAL_EDUCATION_FALLBACK_ENABLED=true."""
+    env = os.environ.get("APP_ENV", "production").strip().lower()
+    if env not in ("staging", "development"):
+        return False
+    flag = os.environ.get("AI_GENERAL_EDUCATION_FALLBACK_ENABLED", "").strip().lower()
+    return flag in ("1", "true", "yes")
+
+
+# Positive signals: the question is asking to EXPLAIN a concept.
+_GENERAL_EDU_INTENT_PHRASES: tuple = (
+    "מה זה",
+    "מה הם ",
+    "מהי ",
+    "מהו ",
+    "מה ה",
+    "הסבר לי",
+    "הסבירי לי",
+    "תסביר לי",
+    "תסבירי לי",
+    "תסביר ",
+    "תסבירי ",
+    "הגדר",
+    "תגדיר",
+    "מה פירוש",
+    "מה המשמעות של",
+    "מה ההבדל בין",
+    "מה הקשר בין",
+    "מה נחשב",
+    "what is ",
+    "what are ",
+    "explain ",
+    "define ",
+    "what does",
+    "what's the difference",
+)
+
+# Additional personal / high-stakes signals NOT caught by safety.py step 3.
+_GENERAL_EDU_EXTRA_BLOCK_PHRASES: tuple = (
+    "יהיה לי",
+    "יהיו לי",
+    "יהיו לך",
+    "אצלי",
+    "הממצא שלי",
+    "התוצאה שלי",
+    "הבדיקה שלי",
+    "הגן שלי",
+    "הסיכון שלי",
+    "מסוכן עבורי",
+    "מסוכן לי",
+    "מה אני צריכה",
+    "מה אני צריך",
+    "מה עלי לעשות",
+    "כדאי לי",
+    "כדאי לך",
+    "מומלץ לי",
+    "שלי",
+)
+
+
+def _classify_general_question(question: str) -> str:
+    """
+    Classify a question that didn't match any KB entry.
+    Returns 'safe_general_education', 'personal_or_high_stakes', or 'out_of_scope'.
+    """
+    lower = question.strip().lower()
+    for phrase in _GENERAL_EDU_EXTRA_BLOCK_PHRASES:
+        if phrase in lower:
+            return "personal_or_high_stakes"
+    for phrase in _GENERAL_EDU_INTENT_PHRASES:
+        if lower.startswith(phrase) or f" {phrase}" in lower:
+            return "safe_general_education"
+    return "out_of_scope"
+
+
+_GENERAL_EDUCATION_SYSTEM_PROMPT = (
+    "You are a helpful genetic counseling assistant in Israel, writing a short "
+    "educational answer in Hebrew for a patient who recently had genetic counseling.\n\n"
+    "TASK: ענה בעברית פשוטה, ב-2 עד 5 משפטים קצרים בלבד. "
+    "Explain the genetics or biology concept clearly and concisely.\n\n"
+    "ALLOWED:\n"
+    "  - General biological or medical concept explanations\n"
+    "  - Disease category definitions (general, not personal)\n"
+    "  - English biomedical terms when needed (mismatch repair, penetrance, "
+    "beta-globin, etc.)\n"
+    "  - General examples (e.g., 'מחלות כגון...')\n"
+    "  - The word 'pathogenic' in a general, non-personal context\n\n"
+    "PROHIBITED - output a single dash (-) if any of these apply:\n"
+    "  - 'יש לך', 'אצלך', 'הסיכון שלך', 'הממצא שלך', 'התוצאה שלך'\n"
+    "  - Diagnosis claims (stating the patient has a disease)\n"
+    "  - Treatment, surgery, or medication recommendations\n"
+    "  - Personal risk estimates or 'you should...' instructions\n"
+    "  - Urgent clinical instructions\n"
+    "  - Question marks, emoji, or ClinVar statistics\n\n"
+    "SAFETY: End with ONE concise sentence when relevant:\n"
+    "  'אם השאלה נוגעת לתוצאה האישית שלך, יש לפנות לצוות הגנטי.'\n\n"
+    "FORMAT:\n"
+    "  - Hebrew mainly; English biomedical terms allowed.\n"
+    "  - 2-5 short sentences. Maximum 500 characters.\n"
+    "  - Output ONLY the sentences. No labels, no preamble, no quotes."
+)
+
+_GENERAL_EDUCATION_RETRY_SYSTEM_PROMPT = (
+    "Write 2-3 short Hebrew sentences explaining the genetics or biology concept "
+    "in the question.\n\n"
+    "STRICT RULES:\n"
+    "  - Hebrew ONLY for main text; English technical terms allowed.\n"
+    "  - Do NOT mention 'יש לך', 'אצלך', 'הסיכון שלך'.\n"
+    "  - Do NOT diagnose, recommend treatment, or estimate risk.\n"
+    "  - When relevant end with: "
+    "'אם השאלה נוגעת לתוצאה האישית שלך, יש לפנות לצוות הגנטי.'\n"
+    "  - No question marks, emoji, or disclaimers.\n"
+    "  - Maximum 600 characters.\n"
+    "  - Output ONLY the sentences."
+)
+
+_GENERAL_EDUCATION_WARNING_HE = (
+    "המידע הבא נוצר אוטומטית ולא עבר בדיקה מקצועית. "
+    "הוא מיועד להסבר כללי בלבד, ואינו מפרש תוצאה אישית, "
+    "אינו אבחנה, ואינו מחליף ייעוץ רפואי."
+)
+
+_GENERAL_EDUCATION_SOURCE_NOTE_HE = (
+    "מידע שנוצר על ידי בינה מלאכותית — לא עבר בדיקה מקצועית ולא מהווה ייעוץ רפואי."
+)
+
+
+def _validate_general_education_draft(text: str) -> "tuple[bool, str]":
+    """Validate a general education AI draft. Returns (is_valid, rejection_reason)."""
+    if not text or not text.strip():
+        return False, "empty"
+    stripped = text.strip()
+    if stripped == "-":
+        return False, "model_unsure"
+    if len(stripped) < 30:
+        return False, "too_short"
+    if len(stripped) > 700:
+        return False, "too_long"
+    hebrew_chars = sum(1 for c in stripped if "א" <= c <= "ת")
+    if hebrew_chars < 15:
+        return False, "not_hebrew"
+    lower = stripped.lower()
+    personal_in_answer = [
+        "יש לך", "אצלך", "הסיכון שלך", "הממצא שלך", "התוצאה שלך",
+        "אתה חולה", "את חולה", "אתה צריך", "את צריכה",
+        "עלייך", "כדאי לך", "מומלץ לך",
+        "your risk", "you have cancer", "you should",
+    ]
+    for phrase in personal_in_answer:
+        if phrase in lower:
+            return False, "personal_language"
+    for term in ("ניתוח", "כריתה", "כימותרפיה", "הפלה", "surgery", "chemotherapy"):
+        if term in lower:
+            return False, "treatment_term"
+    return True, ""
+
+
+def _generate_general_education_draft(question: str) -> "tuple[Optional[str], dict]":
+    """
+    Call the LLM to generate a general education explanation.
+    Returns (text_or_None, debug_dict). Never raises.
+    """
+    ai_debug: dict = {"attempted": True}
+    try:
+        client = create_llm_client()
+    except (ValueError, Exception):
+        ai_debug["generated"] = False
+        ai_debug["rejection_code"] = "llm_not_configured"
+        return None, ai_debug
+    provider_name = type(client).__name__
+    ai_debug["provider"] = provider_name
+    text: Optional[str] = None
+    try:
+        text = client.call_text_raw(
+            question,
+            system_prompt=_GENERAL_EDUCATION_SYSTEM_PROMPT,
+        )
+    except Exception as exc:
+        ai_debug["generated"] = False
+        ai_debug["rejection_code"] = "generation_error"
+        ai_debug["error_type"] = type(exc).__name__
+        return None, ai_debug
+    is_valid, reason = _validate_general_education_draft(text or "")
+    if not is_valid:
+        try:
+            text2 = client.call_text_raw(
+                question,
+                system_prompt=_GENERAL_EDUCATION_RETRY_SYSTEM_PROMPT,
+            )
+            is_valid2, reason2 = _validate_general_education_draft(text2 or "")
+            if is_valid2:
+                text = text2
+                is_valid = True
+            else:
+                reason = reason2
+        except Exception:
+            pass
+    if not is_valid:
+        ai_debug["generated"] = False
+        ai_debug["validation_passed"] = False
+        ai_debug["rejection_code"] = reason
+        return None, ai_debug
+    ai_debug["generated"] = True
+    return (text or "").strip(), ai_debug
+
+
+def _build_general_education_answer(question: str) -> "Optional[dict]":
+    """
+    Generate and return a general AI education answer dict, or None on failure.
+    """
+    text, ai_debug = _generate_general_education_draft(question)
+    if not text:
+        return None
+    return {
+        "answer": (
+            "שאלתך עוסקת במושג כללי בגנטיקה. "
+            "להלן הסבר שנוצר אוטומטית — אנא קרא את ההסתייגות המצורפת."
+        ),
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": "general_education_ai",
+        "suggested_questions": [],
+        "llm_used": True,
+        "fallback_used": False,
+        "llm_mode": "general_education_draft",
+        "unverified_general_draft": {
+            "status": "ai_generated_unreviewed",
+            "text_he": text,
+            "warning_he": _GENERAL_EDUCATION_WARNING_HE,
+            "source_note_he": _GENERAL_EDUCATION_SOURCE_NOTE_HE,
+        },
+        "ai_general_debug": ai_debug,
+    }
 
 
 def _question_has_high_stakes_phrases(question: str) -> bool:
@@ -3269,7 +3518,7 @@ def answer_question(
         "safety_level": "requires_genetic_counselor" if requires_gc else "general_information",
         "needs_genetic_counselor": requires_gc,
         "matched_topic": entry["id"],
-        "suggested_questions": list(entry.get("suggested_questions", [])),
+        "suggested_questions": list(entry.get("suggested_questions", []))[:3],
         "llm_used": False,
         "fallback_used": True,
         "llm_mode": "none",

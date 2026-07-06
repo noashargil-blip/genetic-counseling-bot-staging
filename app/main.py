@@ -258,6 +258,22 @@ class CounselingAskResponse(BaseModel):
             "validation_passed, rejection_code. Never contains API keys or prompts."
         ),
     )
+    unverified_general_draft: Optional[dict] = Field(
+        None,
+        description=(
+            "Present when the general education AI fallback generated a valid draft. "
+            "Contains status, text_he, warning_he, source_note_he. "
+            "Always absent in production. Never contains personal data or API keys."
+        ),
+    )
+    ai_general_debug: Optional[dict] = Field(
+        None,
+        description=(
+            "Present when the general education AI fallback generated a draft. "
+            "Contains attempted, provider, generated, rejection_code. "
+            "Never contains API keys, prompts, or personal data."
+        ),
+    )
 
     @model_serializer
     def _serialize(self) -> dict:
@@ -271,7 +287,7 @@ class CounselingAskResponse(BaseModel):
             "safety_level": self.safety_level,
             "needs_genetic_counselor": self.needs_genetic_counselor,
             "matched_topic": self.matched_topic,
-            "suggested_questions": self.suggested_questions,
+            "suggested_questions": self.suggested_questions[:3],
             "llm_used": self.llm_used,
             "fallback_used": self.fallback_used,
             "llm_mode": self.llm_mode,
@@ -292,6 +308,10 @@ class CounselingAskResponse(BaseModel):
             out["unverified_gene_draft"] = self.unverified_gene_draft
         if self.ai_draft_debug is not None:
             out["ai_draft_debug"] = self.ai_draft_debug
+        if self.unverified_general_draft is not None:
+            out["unverified_general_draft"] = self.unverified_general_draft
+        if self.ai_general_debug is not None:
+            out["ai_general_debug"] = self.ai_general_debug
         return out
 
 
