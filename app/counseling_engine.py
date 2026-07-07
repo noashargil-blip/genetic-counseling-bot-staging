@@ -698,9 +698,7 @@ _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT = (
     "  1. Explain the gene's main biological role (what protein it produces or what "
     "biological process it participates in).\n"
     "  2. If the gene has ONE very well-known and central clinical association, you may "
-    "mention it cautiously in a single sentence using 'קשור ל...' — not 'גורם ל...'.\n"
-    "  3. End with ONE safety sentence: "
-    "'המשמעות של כל ממצא ספציפי נקבעת על ידי הצוות הגנטי.'\n\n"
+    "mention it cautiously in a single sentence using 'קשור ל...' — not 'גורם ל...'.\n\n"
     "ALLOWED:\n"
     "  - Gene symbols in English (BRCA1, DMD, MSH2, APOE, etc.)\n"
     "  - English biomedical terms (dystrophin, mismatch repair, beta-globin, etc.)\n"
@@ -729,7 +727,6 @@ _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT = (
     "  - Sentence 1: the gene's molecular/biological role only.\n"
     "  - Sentence 2 (optional): ONE specific, named clinical association if highly "
     "central to this gene — use 'קשור ל' not 'גורם ל'. Do NOT invent this.\n"
-    "  - Final sentence: 'המשמעות האישית נקבעת על ידי הצוות הגנטי.'\n"
     "  - Do NOT use 'יש לך', 'אצלך', 'הסיכון שלך'.\n"
     "  - Do NOT say 'גורם ל...' or 'נטייה לסרטן'.\n"
     "  - Do NOT give lists of diseases.\n"
@@ -1279,6 +1276,81 @@ def _build_trisomy21_answer() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Extra sex chromosome / chromosomal aneuploidy educational answer
+# (XXY, XXX, XYY, extra X chromosome, extra Y chromosome)
+# NOTE: trisomy21 ("כרומוזום 21 עודף") is handled separately above.
+# ---------------------------------------------------------------------------
+
+_EXTRA_CHROMOSOME_RE = re.compile(
+    r"\bXXY\b|\bXXX\b|\bXYY\b|\bXXXY\b|\bXYYY\b"
+    r"|Klinefelter|קליינפלטר|triple\s*x"
+    r"|כרומוזום\s+(?:X|Y|מין)\s+(?:עודף|נוסף)"
+    r"|(?:עודף|נוסף)\s+כרומוזום\s+(?:X|Y|מין)"
+    r"|כרומוזום\s+(?:עודף|נוסף)\s+(?:X|Y)"
+    r"|(?:X|Y)\s+(?:עודף|נוסף)\b",
+    re.IGNORECASE,
+)
+
+_EXTRA_CHROMOSOME_EDUCATIONAL_HE = (
+    "כרומוזום מין עודף פירושו שיש עותק נוסף של כרומוזום מין בחלק מהתאים או בכולם. "
+    "המשמעות תלויה בהרכב הכרומוזומים המדויק — למשל XXY (תסמונת קליינפלטר), XXX, או XYY — "
+    "ובשאלה אם הממצא נמצא בכל התאים (טריזומיה מלאה) או רק בחלקם (פסיפס/מוזאיקה).\n\n"
+    "מצבים אלה יכולים להיות קשורים למנעד רחב של מאפיינים: חלקם קלים, חלקם משמעותיים יותר, "
+    "ולעיתים לא קיים כלל ביטוי קליני משמעותי. הביטוי משתנה מאוד מאדם לאדם.\n\n"
+    "האבחנה מאושרת בדרך כלל על ידי בדיקת קריוטיפ (בדיקת כרומוזומים). "
+    "חשוב לדון עם הצוות הגנטי על ההקשר הספציפי של הממצא."
+)
+
+
+def _detect_extra_chromosome(text: str) -> bool:
+    """True when the question contains sex chromosome aneuploidy signals (not trisomy21)."""
+    if _detect_trisomy21(text):
+        return False
+    return bool(_EXTRA_CHROMOSOME_RE.search(text))
+
+
+def _build_extra_chromosome_answer() -> dict:
+    return {
+        "answer": _EXTRA_CHROMOSOME_EDUCATIONAL_HE,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": "chromosomal_finding",
+        "suggested_questions": [
+            "מה ההבדל בין טריזומיה לבין פסיפס (מוזאיקה)?",
+            "האם ממצא כרומוזומי נבדק תמיד בכל התאים?",
+            "מה כדאי לשאול את הצוות הגנטי על ממצא כרומוזומי?",
+        ],
+        "llm_used": False,
+        "fallback_used": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Out-of-domain detection — clearly non-genetics/medicine questions
+# ---------------------------------------------------------------------------
+
+_OUT_OF_DOMAIN_RE = re.compile(
+    r"מגדל\s+אייפל|eiffel\s+tower"
+    r"|ראש\s+ממשלת?\s+(?:ישראל|בריטניה|צרפת|גרמניה|אמריקה|ארה.?ב)"
+    r"|מחיר\s+ה?(?:דירה|מכונית|רכב|דלק)\b"
+    r"|מנות\s+(?:מזון|אוכל)|מתכון\s+ל"
+    r"|מזג\s+(?:האוויר|אוויר)\b"
+    r"|פסל\s+החירות|statue\s+of\s+liberty"
+    r"|מי\s+ניצח|מי\s+זכה",
+    re.IGNORECASE,
+)
+
+_OUT_OF_DOMAIN_HE = (
+    "אני מיועד/ת להסברים בתחום גנטיקה, בדיקות גנטיות ומושגים רפואיים קשורים."
+)
+
+
+def _detect_out_of_domain(text: str) -> bool:
+    """True when the question is clearly outside the genetics/medicine domain."""
+    return bool(_OUT_OF_DOMAIN_RE.search(text))
+
+
+# ---------------------------------------------------------------------------
 # VUS options — practical patient answer for "what are my options?" + VUS
 # ---------------------------------------------------------------------------
 
@@ -1306,7 +1378,7 @@ _VUS_OPTIONS_HE = (
     "ראיות מדעיות חדשות, ולכן כדאי לשמור קשר עם הצוות הגנטי.\n\n"
     "4. לעיתים, בדיקת קרובי משפחה יכולה לתרום לסיווג מדויק יותר — זה נקרא בדיקת "
     "segregation.\n\n"
-    "5. אפשר לשאול את הצוות הגנטי: האם קיימת תוכנית מעקב? האם הסיווג צפוי להתעדכן?"
+    "5. כדאי לעקוב אם הסיווג מתעדכן בעתיד ולשמור את פרטי הממצא בצורה מסודרת."
 )
 
 
@@ -2083,12 +2155,16 @@ def _question_has_high_stakes_phrases(question: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _ai_general_education_fallback_enabled() -> bool:
-    """True only in staging/development with AI_GENERAL_EDUCATION_FALLBACK_ENABLED=true."""
+    """True when OPENAI_API_KEY is set, or in staging/dev with flag enabled."""
+    openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if openai_key:
+        return True
     env = os.environ.get("APP_ENV", "production").strip().lower()
-    if env not in ("staging", "development"):
-        return False
-    flag = os.environ.get("AI_GENERAL_EDUCATION_FALLBACK_ENABLED", "").strip().lower()
-    return flag in ("1", "true", "yes")
+    if env in ("staging", "development"):
+        flag = os.environ.get("AI_GENERAL_EDUCATION_FALLBACK_ENABLED", "").strip().lower()
+        if flag in ("1", "true", "yes"):
+            return True
+    return False
 
 
 # Positive signals: the question is asking to EXPLAIN a concept.
@@ -2111,6 +2187,19 @@ _GENERAL_EDU_INTENT_PHRASES: tuple = (
     "מה ההבדל בין",
     "מה הקשר בין",
     "מה נחשב",
+    # Medical/disease questions — "do people die from...", "what happens with..."
+    "מתים מ",
+    "מה קורה כש",
+    "מה קורה ל",
+    "איך עובד",
+    "איך עובדת",
+    "מה גורם ל",
+    "מה מאפיין",
+    "מה הסיבה ל",
+    "מה הגן ל",   # "what gene is responsible for albinism?"
+    "מה הגן של",
+    "איזה גן",    # "which gene..."
+    "כיצד",      # "how..."
     "what is ",
     "what are ",
     "explain ",
@@ -2154,6 +2243,10 @@ def _classify_general_question(question: str) -> str:
     """
     lower = question.strip().lower()
 
+    # Out-of-domain: clearly non-genetics/medicine → skip AI, use short message
+    if _detect_out_of_domain(question):
+        return "out_of_scope"
+
     # Extra personal/high-stakes guard (beyond safety.py step 3)
     for phrase in _GENERAL_EDU_EXTRA_BLOCK_PHRASES:
         if phrase in lower:
@@ -2170,6 +2263,9 @@ def _classify_general_question(question: str) -> str:
 _GENERAL_EDUCATION_SYSTEM_PROMPT = (
     "You are a helpful genetic counseling assistant in Israel, writing a short "
     "educational answer in Hebrew for a patient who recently had genetic counseling.\n\n"
+    "SCOPE: Answer ONLY questions about genetics, biology, medicine, or related "
+    "biomedical concepts. If the question is about something else (geography, politics, "
+    "food, sports, etc.) — output a single dash (-) only.\n\n"
     "TASK: ענה בעברית פשוטה, ב-2 עד 5 משפטים קצרים בלבד. "
     "Explain the genetics or biology concept clearly and concisely.\n\n"
     "ALLOWED:\n"
@@ -2180,11 +2276,13 @@ _GENERAL_EDUCATION_SYSTEM_PROMPT = (
     "  - General examples (e.g., 'מחלות כגון...')\n"
     "  - The word 'pathogenic' in a general, non-personal context\n\n"
     "PROHIBITED - output a single dash (-) if any of these apply:\n"
+    "  - The question is not about genetics, biology, or medicine\n"
     "  - 'יש לך', 'אצלך', 'הסיכון שלך', 'הממצא שלך', 'התוצאה שלך'\n"
     "  - Diagnosis claims (stating the patient has a disease)\n"
     "  - Treatment, surgery, or medication recommendations\n"
     "  - Personal risk estimates or 'you should...' instructions\n"
     "  - Urgent clinical instructions\n"
+    "  - Referral phrases (do not add 'יש לפנות לצוות הגנטי' or similar)\n"
     "  - Question marks, emoji, or ClinVar statistics\n\n"
     "FORMAT:\n"
     "  - Hebrew mainly; English biomedical terms allowed.\n"
@@ -3706,10 +3804,20 @@ def classify_question_intent(
         return {"intent": "privacy_identifier", "gene_symbol": None,
                 "reason": "identifying_info_detected"}
 
+    # A.5. Out-of-domain — clearly non-genetics/medicine; fires before KB lookup
+    if _detect_out_of_domain(text):
+        return {"intent": "out_of_domain", "gene_symbol": None,
+                "reason": "out_of_domain_detected"}
+
     # B. Reproductive / abortion decision — irreversible, special boundary
     if _is_reproductive_decision_question(text):
         return {"intent": "reproductive_block", "gene_symbol": None,
                 "reason": "reproductive_decision_question"}
+
+    # B.3. Extra sex chromosome (XXY, XXX, XYY, "כרומוזום X עודף") — educational
+    if _detect_extra_chromosome(text):
+        return {"intent": "extra_chromosome_education", "gene_symbol": None,
+                "reason": "extra_chromosome_signals_in_text"}
 
     # B.5. Trisomy 21 / Down syndrome — educational; fires before personal block
     if _detect_trisomy21(text):
@@ -3806,6 +3914,18 @@ def answer_question(
             "fallback_used": False,
         }
 
+    # A.5. Out-of-domain — short "not my domain" message; bypasses KB lookup.
+    if intent == "out_of_domain":
+        return {
+            "answer": _OUT_OF_DOMAIN_HE,
+            "safety_level": "out_of_scope",
+            "needs_genetic_counselor": False,
+            "matched_topic": None,
+            "suggested_questions": [],
+            "llm_used": False,
+            "fallback_used": True,
+        }
+
     # B. Reproductive / abortion decision — irreversible; always fires even when
     #    the question also contains a gene name or specific variant.
     if intent == "reproductive_block":
@@ -3818,6 +3938,10 @@ def answer_question(
             "llm_used": False,
             "fallback_used": False,
         }
+
+    # B.3. Extra sex chromosome educational answer.
+    if intent == "extra_chromosome_education":
+        return _build_extra_chromosome_answer()
 
     # B.5. Trisomy 21 / Down syndrome educational answer.
     if intent == "trisomy21_education":
@@ -3926,6 +4050,19 @@ def answer_question(
         if not any(sig in lower_q for sig in _x_signals):
             entry = None
     if entry is None:
+        # 6.4. Out-of-domain — clearly non-genetics/medicine — return short message
+        # regardless of AI settings; fires before AI fallback.
+        if not topic and _detect_out_of_domain(text):
+            return {
+                "answer": _OUT_OF_DOMAIN_HE,
+                "safety_level": "out_of_scope",
+                "needs_genetic_counselor": False,
+                "matched_topic": None,
+                "suggested_questions": [],
+                "llm_used": False,
+                "fallback_used": True,
+            }
+
         # 6.5. General education AI fallback — fires only in staging/development
         # with AI_GENERAL_EDUCATION_FALLBACK_ENABLED=true, and only for safe
         # concept questions that are not personal or high-stakes.
