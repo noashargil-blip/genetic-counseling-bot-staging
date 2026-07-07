@@ -1212,7 +1212,7 @@ _GENE_SUGGESTED_QUESTIONS = [
 _GENE_SUGGESTED_QUESTIONS_GENERAL = [
     "מה ההבדל בין VUS לבין ממצא pathogenic?",
     "האם ממצא בגן יכול להשתנות בסיווגו לאורך זמן?",
-    "מה כדאי לשאול את הגנטיקאי על ממצא בגן?",
+    "מה ההבדל בין גן לבין וריאנט?",
 ]
 
 
@@ -1926,12 +1926,24 @@ _GENE_EDUCATION_BROKEN_RE = re.compile(
     r"|600\s+characters"
     r"|Maximum\s+600"
     r"|\bClnVar\b"                # common LLM typo for ClinVar
+    r"|\bClanVar\b"               # another typo variant
     r"|קלינוואר"                  # Hebrew transliteration of ClinVar
     r"|\[.*?\]"                   # square-bracket template artifacts
     r"|\{.*?\}"                   # curly-brace template artifacts
     r"|קסם"                       # "magic" — hype
     r"|מרתק"                      # "fascinating" — hype
     r"|מדהי[מם]",                 # "amazing" — hype
+    re.IGNORECASE,
+)
+
+# Rejects drafts that are primarily ClinVar-count summaries rather than biology.
+# These appear when the conflicting context block was passed to the biology prompt.
+_GENE_EDUCATION_CLINVAR_COUNT_RE = re.compile(
+    r"(?:\d[\d,]*)\s+וריאנטים?\s+(?:פתוגניים|pathogenic|ב-?ClinVar|במאגר)"
+    r"|(?:\d[\d,]*)\s+וריאנטים?\s+ב-?ClinVar"
+    r"|ב-?ClinVar\s+(?:יש|נמצא|מתועד|קיים)"
+    r"|יש\s+לו\s+(?:\d[\d,]*)\s+וריאנטים"
+    r"|נמצאו\s+(?:\d[\d,]*)\s+וריאנטים",
     re.IGNORECASE,
 )
 
@@ -1997,6 +2009,9 @@ def _validate_gene_education_draft(text: str) -> "Optional[str]":
     m = _GENE_EDUCATION_BROKEN_RE.search(text)
     if m:
         return f"broken/hype output: {m.group(0)!r}"
+    m = _GENE_EDUCATION_CLINVAR_COUNT_RE.search(text)
+    if m:
+        return f"clinvar_count_summary (not biology): {m.group(0)!r}"
     heb = re.findall("[א-׿]", text)
     if not heb:
         return "no Hebrew characters"
@@ -2591,17 +2606,26 @@ def _generate_unverified_gene_draft(
     use_clinvar_context = bool(clinvar_context)
 
     try:
-        if use_clinvar_context:
+        if use_clinvar_context and use_lenient_validator:
+            # Biology-first path for Tier-2 explicit gene education questions.
+            # ClinVar counts are already in gene_metadata for the collapsed UI card.
+            # Passing _build_clinvar_context_block() here conflicted with the biology
+            # system prompt (that block ends with "Do NOT describe the gene's biology"),
+            # causing OpenAI to return ClinVar-count summaries instead of function.
+            user_content = (
+                f"Gene: {gene}\n"
+                f"Task: Explain the biological role of this gene in Hebrew for a patient."
+            )
+            system_prompt_1 = _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT
+            system_prompt_2 = _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT
+        elif use_clinvar_context:
+            # ClinVar clinical-context path (non-biology, strict validator).
             context_block = _build_clinvar_context_block(gene, clinvar_context)
             user_content = context_block
             if question:
                 user_content += f"\n\nUser question context: {question[:200]}"
-            if use_lenient_validator:
-                system_prompt_1 = _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT
-                system_prompt_2 = _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT
-            else:
-                system_prompt_1 = _UNVERIFIED_CLINVAR_DRAFT_SYSTEM_PROMPT
-                system_prompt_2 = _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT
+            system_prompt_1 = _UNVERIFIED_CLINVAR_DRAFT_SYSTEM_PROMPT
+            system_prompt_2 = _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT
         else:
             user_content = f"Gene symbol: {gene}"
             if question:
@@ -3389,7 +3413,8 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     )
     tier2_fallback_answer = (
         _correction_prefix_t2 +
-        f"אין עדיין סיכום עברי מאושר לגן {gene} במערכת."
+        f"עדיין אין לי סיכום ביולוגי זמין לגן {gene}. "
+        f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע."
     )
     suggested = _gene_suggested_questions(question, gene)
     _draft_debug: dict = {}
@@ -3426,6 +3451,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             "answer_tier": "tier2",
             "gene_knowledge_status": "unverified_available",
             "unverified_gene_draft_available": draft_available,
+            # When the AI draft is promoted to the main answer, the frontend must
+            # not also render the draft card — that would show the same text twice.
+            "draft_promoted_to_answer": draft_available,
             "ai_draft_attempted": _draft_debug.get("attempted", False),
             "ai_draft_generated": draft_available,
             "significance_breakdown": summary.get("by_significance") or {},
@@ -3433,6 +3461,8 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         },
     }
     if draft_available:
+        # Include unverified_gene_draft for API consumers and tests, but the
+        # frontend card is suppressed via draft_promoted_to_answer=True.
         result["unverified_gene_draft"] = unverified_draft
         result["ai_draft_debug"] = {
             "attempted": True,

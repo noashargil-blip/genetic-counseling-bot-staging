@@ -545,7 +545,9 @@ function buildUnverifiedDraftCard(msg) {
   // Only show draft UI if the backend confirmed a draft was actually generated.
   // unverified_gene_draft_available is now set AFTER the draft attempt, so it
   // is true only when a real draft object exists.
-  if (!meta || meta.answer_tier !== 'tier2' || !meta.unverified_gene_draft_available) return null;
+  // Suppress the draft card when the draft was already promoted to the main answer
+  // (draft_promoted_to_answer=true), which prevents rendering the same text twice.
+  if (!meta || meta.answer_tier !== 'tier2' || !meta.unverified_gene_draft_available || meta.draft_promoted_to_answer) return null;
 
   const card = document.createElement('div');
   card.className = 'unverified-draft-card';
