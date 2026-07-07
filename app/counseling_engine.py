@@ -572,11 +572,7 @@ _CLINVAR_IN_DRAFT_RE = re.compile(r"\bClinVar\b", re.IGNORECASE)
 
 # Warning text prepended to every patient-visible unverified draft.
 _UNVERIFIED_DRAFT_WARNING_HE = (
-    "המידע הבא נוצר אוטומטית על ידי מודל שפה ולא עבר בדיקה מקצועית. "
-    "הוא עשוי להיות שגוי, חלקי או לא מעודכן. "
-    "אין להשתמש בו לפירוש המשמעות האישית של תוצאת הבדיקה, "
-    "לקבלת החלטות רפואיות, או להערכת סיכון. "
-    "המשמעות האישית נקבעת רק על ידי הצוות הגנטי."
+    "מידע AI לא מאומת — להסבר כללי בלבד."
 )
 
 # LLM system prompt for generating short general gene biology background.
@@ -643,12 +639,9 @@ _UNVERIFIED_CLINVAR_DRAFT_SYSTEM_PROMPT = (
     "into Hebrew.\n\n"
     "TASK: Write 1-2 short, plain Hebrew sentences that:\n"
     "  - Briefly explain what this gene is generally associated with, using the Hebrew "
-    "contexts provided.\n"
-    "  - End with a brief neutral note that the personal meaning of any finding is "
-    "determined by the genetics team.\n\n"
+    "contexts provided.\n\n"
     "STYLE EXAMPLE (HBB gene, contexts: אנמיה חרמשית, תלסמיה):\n"
-    "  'גן HBB קשור לעיתים למצבים של המוגלובין כגון אנמיה חרמשית ותלסמיה. "
-    "המשמעות האישית של כל ממצא נקבעת על ידי הצוות הגנטי.'\n\n"
+    "  'גן HBB קשור לעיתים למצבים של המוגלובין כגון אנמיה חרמשית ותלסמיה.'\n\n"
     "You MUST NOT:\n"
     "  - Mention 'ClinVar', 'ClnVar', 'מאגר', 'בסיס נתונים', or any database name.\n"
     "  - Include variant counts, pathogenic counts, or any statistics.\n"
@@ -694,29 +687,30 @@ _UNVERIFIED_CLINVAR_DRAFT_RETRY_SYSTEM_PROMPT = (
 _GENE_EDUCATION_DRAFT_SYSTEM_PROMPT = (
     "You are a genetic counseling assistant writing a short Hebrew educational summary "
     "about a gene for a patient who just had genetic counseling in Israel.\n\n"
-    "TASK: ענה בעברית פשוטה וקצרה, ב-2 עד 4 משפטים קצרים בלבד.\n"
+    "TASK: ענה בעברית פשוטה וקצרה, ב-3 עד 5 משפטים קצרים בלבד.\n"
     "  1. Explain the gene's main biological role (what protein it produces or what "
     "biological process it participates in).\n"
     "  2. If the gene has ONE very well-known and central clinical association, you may "
-    "mention it cautiously in a single sentence using 'קשור ל...' — not 'גורם ל...'.\n\n"
+    "mention it cautiously using 'קשור ל...' or 'מוכר בהקשר של...' — not 'גורם ל...'.\n\n"
     "ALLOWED:\n"
     "  - Gene symbols in English (BRCA1, DMD, MSH2, APOE, etc.)\n"
     "  - English biomedical terms (dystrophin, mismatch repair, beta-globin, etc.)\n"
     "  - A single specific, named clinical association when highly central to this gene\n"
+    "  - Cautious phrasing: 'קשור ל...', 'מוכר בהקשר של...', 'נמצא בהקשר של...'\n"
     "  - The word 'pathogenic' in a general non-personal context\n\n"
     "PROHIBITED:\n"
     "  - 'יש לך', 'אצלך', 'הסיכון שלך', 'הממצא שלך', 'התוצאה שלך'\n"
     "  - Definitive causation: 'גורם ל...' / 'מוביל ל...' — use 'קשור ל' instead\n"
-    "  - Cancer predisposition framing: 'נטייה לסרטן'\n"
-    "  - Lists of multiple diseases, cancers, or conditions\n"
-    "  - 'מצבים כמו...' / 'diseases like...'\n"
-    "  - 'סוגי סרטן שונים' (various cancer types)\n"
+    "  - Cancer predisposition framing: 'נטייה לסרטן', 'סוגי סרטן שונים'\n"
+    "  - Vague broad disease lists: 'מצבים כמו X,Y,Z', 'מחלות רבות כמו', 'מגוון רחב של מחלות'\n"
+    "  - Referral phrases: do NOT add 'לפנות לצוות הגנטי', 'המשמעות נקבעת על ידי', "
+    "'לתשובה אישית', or similar\n"
     "  - Treatment, surgery, or screening recommendations\n"
     "  - Personal risk estimates or 'you should...'\n"
     "  - Question marks, emoji, or ClinVar statistics\n\n"
     "FORMAT:\n"
     "  - Hebrew ONLY for main text. Gene symbols and medical terms in English.\n"
-    "  - 2-4 short sentences. Maximum 450 characters.\n"
+    "  - 3-5 short sentences. Maximum 500 characters.\n"
     "  - Output ONLY the sentences. No labels, no preamble, no quotes."
 )
 
@@ -1427,6 +1421,7 @@ _EDUCATIONAL_PERSONAL_PHRASES: tuple = (
 _EDUCATIONAL_PERSONAL_DECISION_BLOCK: tuple = (
     "ניתוח",
     "כריתה",
+    "כריתת",   # construct form of כריתה (e.g. "כריתת שד") — different char sequence
     "כימותרפיה",
     "הפלה",
     "מה הסיכון שלי",
@@ -1446,6 +1441,70 @@ def _is_educational_personal_context(text: str) -> bool:
         return False
     has_decision = any(phrase in lower for phrase in _EDUCATIONAL_PERSONAL_DECISION_BLOCK)
     return not has_decision
+
+
+# ---------------------------------------------------------------------------
+# Surgery / major-procedure decision detection
+# ---------------------------------------------------------------------------
+
+_SURGERY_DECISION_RE = re.compile(
+    # "האם לעשות/לעבור" + major surgery term — decision-seeking pattern
+    r"האם\s+ל(?:עשות|עבור)\s+(?:ניתוח|כריתה|כריתת)"
+    # "לעבור ניתוח" standalone (used without "האם" prefix in some phrasings)
+    r"|לעבור\s+ניתוח"
+    # "כריתה מניעתית" — standalone preventive mastectomy, always a major decision
+    r"|כריתה\s+מניע"
+    r"|mastectomy"
+    r"|preventive\s+surgery",
+    re.IGNORECASE,
+)
+
+
+def _is_surgery_decision_question(text: str) -> bool:
+    return bool(_SURGERY_DECISION_RE.search(text))
+
+
+def _build_surgery_decision_answer(
+    text: str, gene_symbol: Optional[str] = None
+) -> dict:
+    """Contextual high-stakes answer for surgery/major-procedure decision questions."""
+    lower = text.lower()
+    has_vus = _mentions_vus(lower)
+
+    if "כריתת שד" in lower or "mastectomy" in lower:
+        action_he = "כריתת שד"
+    elif "כריתה" in lower or "כריתת" in lower:
+        action_he = "כריתה מניעתית" if "מניע" in lower else "כריתה"
+    else:
+        action_he = "ניתוח"
+
+    gene_str = f" ב{gene_symbol}" if gene_symbol else ""
+
+    if has_vus:
+        answer = (
+            f"VUS{gene_str} אינו שקול לממצא פתוגני, ובדרך כלל לא מקבלים החלטות "
+            f"ניתוחיות משמעותיות כמו {action_he} על סמך VUS בלבד. "
+            f"{action_he} היא החלטה שתלויה בדוח הגנטי המלא, בהיסטוריה האישית "
+            f"והמשפחתית ובשיקולים קליניים נוספים. "
+            f"הבוט יכול להסביר את ההבדל בין VUS לממצא פתוגני, אך לא להמליץ על ניתוח."
+        )
+    else:
+        answer = (
+            f"שאלה בנוגע ל{action_he} היא החלטה רפואית שתלויה בדוח הגנטי המלא, "
+            f"בהיסטוריה האישית והמשפחתית ובשיקולים קליניים נוספים. "
+            f"הצוות הגנטי הוא שמכיר את המקרה שלך ויסביר מה המשמעות הקלינית."
+        )
+
+    return {
+        "answer": answer,
+        "safety_level": "requires_genetic_counselor",
+        "needs_genetic_counselor": True,
+        "matched_topic": "surgery_decision",
+        "suggested_questions": [
+            "מה ההבדל בין VUS לממצא פתוגני?",
+            "אילו גורמים שוקלים לפני ניתוח מניעתי?",
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1846,6 +1905,7 @@ _FORBIDDEN_GENE_EDUCATION_DRAFT_RE = re.compile(
     r"|הממצא\s+שלך\s+אומר"
     r"|התוצאה\s+שלך\s+מצביעה"
     # Medical action directives (personal)
+    r"|(?:את|אתה)\s+(?:צריכה|צריך)\s+(?:ניתוח|טיפול|כריתה|MRI|מעקב)"
     r"|עליך\s+ל"
     r"|כדאי\s+לך\s+ל"
     r"|מומלץ\s+לך\s+ל"
@@ -1881,14 +1941,24 @@ _GENE_EDUCATION_BROKEN_RE = re.compile(
 # Blocks vague/list patterns that invite hallucination.
 _GENE_EDUCATION_DISEASE_ASSOC_RE = re.compile(
     # Definitive causation — always block; use "קשור ל" instead.
-    r"גורמ(?:ת|ים|ות)?\s+ל(?:מחלה|מחלות|סרטן|תסמונת|הפרעה)"
-    # Vague disease-category associations — hallucination-prone (no specific name given).
-    r"|קשור\s+ל(?:מחלות|הפרעה|הפרעות|מוגבלות|מצבים)"
+    # Covers all inflected forms: גורם (m.sg, final-mem ם), גורמת (f.sg),
+    # גורמים (m.pl), גורמות (f.pl). The previous גורמ(ת|ים|ות)? missed גורם
+    # because ם (final-mem U+05DD) ≠ מ (medial-mem U+05DE).
+    r"גור(?:ם|מת|מים|מות)\s+ל(?:מחלה|מחלות|סרטן|תסמונת|הפרעה)"
     # Cancer predisposition framing — personal risk framing.
     r"|נטייה\s+לסרטן"
     # "various cancer types" — invitation to invent a list.
     r"|סוגי\s+סרטן\s+שונים"
-    # "conditions/diseases like ..." structure — invites hallucinated lists.
+    # "various/many diseases" — vague list indicator without specific type qualifier.
+    # Blocks: "מחלות שונות של מערכת העצבים", "מחלות רבות".
+    # Allows: "מחלות נוירולוגיות כמו אלצהיימר" (specific adjective, not "שונות/רבות").
+    r"|מחלות\s+(?:שונות|רבות|מגוונות)"
+    # Broad hallucination-prone list phrases — "wide range of diseases" / "many conditions".
+    r"|מגוון\s+רחב\s+של\s+מחלות"
+    r"|מצבים\s+רבים\s+(?:כגון|כמו)"
+    # "conditions like X, Y, Z" / "diseases like X, Y, Z" — vague list without named qualifier.
+    # NOTE: "מחלות [specific adjective] כמו" (e.g. "מחלות נוירולוגיות כמו") does NOT match
+    # \s+כמו because \s+ requires IMMEDIATE whitespace between מחלות and כמו.
     r"|מצבים\s+כמו"
     r"|מחלות\s+כמו",
     re.IGNORECASE,
@@ -3829,6 +3899,12 @@ def classify_question_intent(
         return {"intent": "specific_variant", "gene_symbol": None,
                 "reason": "specific_variant_in_text"}
 
+    # C.3. Surgery/major-procedure decision — fires before educational personal context
+    # so that "האם לעשות כריתת שד?" is never misrouted to educational content.
+    if _is_surgery_decision_question(text):
+        return {"intent": "surgery_decision", "gene_symbol": _detect_known_gene(text),
+                "reason": "surgery_decision_question"}
+
     # C.5. Educational personal context — personal phrasing but seeking explanation.
     # Fires BEFORE personal_high_stakes so that questions like "הרופא אמר שיש לי VUS,
     # מה האפשרויות?" are routed to education, not blocked.
@@ -3976,6 +4052,10 @@ def answer_question(
             else:
                 return _build_gene_education_fallback(_edu_gene)
         # No gene found — fall through to KB / AI / fallback below.
+
+    # C.3. Surgery/major-procedure decision — VUS-aware contextual answer.
+    if intent == "surgery_decision":
+        return _build_surgery_decision_answer(text, gene_symbol=intent_info.get("gene_symbol"))
 
     # D. Personal medical interpretation / action request — redirect to counselor.
     if intent == "personal_high_stakes":

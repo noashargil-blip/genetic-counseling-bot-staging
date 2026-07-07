@@ -348,7 +348,7 @@ function buildGeneMetadataHtml(meta) {
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
-const DISCLAIMER_HE = 'לתשובה אישית לפי תוצאות הבדיקה שלך יש לפנות לצוות הגנטי.';
+const _AI_BADGE_HE = 'מידע AI לא מאומת — להסבר כללי בלבד.';
 
 function safetyBadgeClass(level) {
   return { contains_identifying_info: 'msg-warning', requires_genetic_counselor: 'msg-notice', out_of_scope: 'msg-notice', general_information: '' }[level] || '';
@@ -371,14 +371,10 @@ function renderMessages() {
     let html = `<p class="msg-text">${escHtml(m.text)}</p>`;
 
     if (isBot && m.role !== 'bot-pending' && !m.isWelcome) {
-      if (!m.generalDraft) {
-        html += `<p class="msg-disclaimer">${escHtml(DISCLAIMER_HE)}</p>`;
-      }
       if (m.geneMetadata) {
         html += buildGeneMetadataHtml(m.geneMetadata);
       } else if (m.llmUsed) {
-        // Gene metadata already shows LLM usage; for other paths show a subtle note.
-        html += `<p class="msg-llm-badge">✦ ניסוח בינה מלאכותית — על בסיס מידע מאושר בלבד</p>`;
+        html += `<p class="msg-llm-badge">✦ ניסוח בינה מלאכותית</p>`;
       }
     }
 
@@ -577,28 +573,18 @@ function buildUnverifiedDraftCard(msg) {
 
       const summary = document.createElement('summary');
       summary.className = 'unverified-draft-summary';
-      summary.textContent = 'מידע ניסיוני לא מאומת על הגן';
+      summary.textContent = 'מידע ניסיוני על הגן';
       details.appendChild(summary);
 
-      const subtitle = document.createElement('p');
-      subtitle.className = 'unverified-draft-subtitle';
-      subtitle.textContent = 'מידע שנוצר על ידי בינה מלאכותית — לא עבר בדיקה מקצועית ולא מהווה פירוש אישי';
-      details.appendChild(subtitle);
-
-      const warning = document.createElement('p');
-      warning.className = 'unverified-draft-warning';
-      warning.textContent = d.warning_he || '';
-      details.appendChild(warning);
+      const badge = document.createElement('p');
+      badge.className = 'ai-badge';
+      badge.textContent = _AI_BADGE_HE;
+      details.appendChild(badge);
 
       const text = document.createElement('p');
       text.className = 'unverified-draft-text';
       text.textContent = d.text_he || '';
       details.appendChild(text);
-
-      const foot = document.createElement('p');
-      foot.className = 'unverified-draft-footer';
-      foot.textContent = d.source_note_he || 'מידע זה לא מאושר על ידי צוות מקצועי ועלול להכיל שגיאות.';
-      details.appendChild(foot);
 
       card.appendChild(details);
     }
@@ -619,7 +605,7 @@ function buildGeneralDraftCard(msg) {
   const d = msg.generalDraft;
   const badge = document.createElement('p');
   badge.className = 'ai-badge';
-  badge.textContent = d.warning_he || 'מידע AI לא מאומת — להסבר כללי בלבד.';
+  badge.textContent = _AI_BADGE_HE;
   return badge;
 }
 
