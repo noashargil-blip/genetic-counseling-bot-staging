@@ -53,6 +53,14 @@ from app.llm_client import LocalLLMClient, LLMClientError, create_llm_client
 
 logger = logging.getLogger(__name__)
 
+# AI_DRAFT_VISIBILITY_MODE controls what patients see when a gene has an AI draft.
+#   "immediate"     — show pending (unreviewed) drafts with an "unverified" label.
+#   "approved_only" — only show drafts that a physician has approved.
+# The default is "immediate" so the system is useful before any reviews are done.
+_AI_DRAFT_VISIBILITY_MODE = os.environ.get(
+    "AI_DRAFT_VISIBILITY_MODE", "immediate"
+).strip().lower()
+
 # ---------------------------------------------------------------------------
 # Gene-name + VUS handling (general education only — never a personal
 # interpretation; this only fires for gene-name mentions WITHOUT a specific
@@ -3424,10 +3432,28 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     )
     draft_available = unverified_draft is not None
 
+    # Visibility mode: "approved_only" suppresses unreviewed drafts from patients.
+    # Instead, look for a physician-approved draft in the review DB.
+    _approved_db_draft = None
+    if _AI_DRAFT_VISIBILITY_MODE == "approved_only" and draft_available:
+        try:
+            from app import review_db as _rdb
+            _approved_db_draft = _rdb.get_approved_draft(gene, draft_type="gene_summary")
+        except Exception:
+            pass  # degraded silently — show fallback
+
     # Function-first: when the draft passed validation, use its text as the main
     # answer. The safety note is already embedded by the prompt ("המשמעות האישית...").
     # The bland "found in ClinVar but no summary" message is the fallback only.
-    if draft_available and unverified_draft:
+    if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+        if _approved_db_draft:
+            # Use physician-approved text (may be physician-edited version)
+            main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
+        else:
+            # No approved draft yet — show the fallback, not the unverified draft
+            main_answer = tier2_fallback_answer
+            draft_available = False  # suppress the unverified draft from the response
+    elif draft_available and unverified_draft:
         main_answer = _correction_prefix_t2 + unverified_draft.get("text_he", tier2_fallback_answer)
     else:
         main_answer = tier2_fallback_answer
@@ -3478,6 +3504,27 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             "reason": "llm_not_configured_or_unknown",
         }
         result["ai_draft_debug"].setdefault("shown", False)
+
+    # Auto-enqueue to physician review DB (non-blocking; never raises to caller).
+    if draft_available and unverified_draft:
+        try:
+            from app import review_db as _rdb  # lazy import to avoid circular dep
+            _rdb.create_draft(
+                draft_type="gene_summary",
+                original_ai_text=unverified_draft.get("text_he", ""),
+                gene_symbol=gene,
+                model_provider=_draft_debug.get("provider"),
+                model_name=unverified_draft.get("generated_by_model"),
+                prompt_version="s26",
+                source_metadata={
+                    "answer_tier": "tier2",
+                    "total_variants": summary.get("total_variants"),
+                    "based_on": unverified_draft.get("based_on"),
+                },
+            )
+        except Exception:
+            pass  # patient response must never be affected
+
     return result
 
 

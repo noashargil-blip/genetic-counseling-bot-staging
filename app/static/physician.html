@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>פורטל סקירה רפואית — גנטיקה</title>
+<style>
+/* ── Token layer ─────────────────────────────────────────────── */
+:root {
+  --bg:            #EEF1F6;
+  --surface:       #FFFFFF;
+  --surface-doc:   #F5F7FA;
+  --surface-2:     #F8F9FB;
+  --sidebar-bg:    #1A2035;
+  --sidebar-text:  #C8D0DF;
+  --sidebar-muted: #7A8499;
+  --border:        #D8DCE6;
+  --border-light:  #E8EBF0;
+  --text:          #0D1117;
+  --text-2:        #4A5368;
+  --text-3:        #8A93A6;
+  --accent:        #1D4ED8;
+  --accent-hover:  #1741BB;
+  --accent-light:  #EEF3FD;
+  --accent-text:   #1D4ED8;
+  --danger:        #DC2626;
+  --danger-hover:  #B91C1C;
+  --danger-light:  #FEF2F2;
+  --success:       #16A34A;
+  --success-light: #F0FDF4;
+  /* status semantic */
+  --s-pending-bg:    #FEF3C7; --s-pending-text: #92400E; --s-pending-stripe: #F59E0B;
+  --s-approved-bg:   #DCFCE7; --s-approved-text: #14532D; --s-approved-stripe: #16A34A;
+  --s-rejected-bg:   #FEE2E2; --s-rejected-text: #991B1B; --s-rejected-stripe: #DC2626;
+  --s-revision-bg:   #EDE9FE; --s-revision-text: #4C1D95; --s-revision-stripe: #7C3AED;
+  --s-superseded-bg: #F3F4F6; --s-superseded-text: #4B5563; --s-superseded-stripe: #9CA3AF;
+
+  --radius:   6px;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 3px rgba(13,17,23,.06), 0 1px 2px rgba(13,17,23,.04);
+  --shadow:    0 4px 12px rgba(13,17,23,.09), 0 1px 3px rgba(13,17,23,.06);
+  --shadow-doc: inset 0 1px 3px rgba(13,17,23,.07);
+  --font: 'Segoe UI', 'Noto Sans Hebrew', 'Arial Hebrew', Arial, sans-serif;
+  --font-mono: 'Cascadia Code', 'Fira Mono', 'Consolas', monospace;
+  --sidebar-w: 220px;
+  --header-h: 54px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:           #0E1118;
+    --surface:      #161C2A;
+    --surface-doc:  #1A2235;
+    --surface-2:    #1E2538;
+    --border:       #2A3248;
+    --border-light: #232B3E;
+    --text:         #E8EDF5;
+    --text-2:       #8A95AE;
+    --text-3:       #5C657A;
+    --accent:       #3B82F6;
+    --accent-hover: #2563EB;
+    --accent-light: #162040;
+    --accent-text:  #93C5FD;
+    --danger:       #F87171;
+    --danger-hover: #EF4444;
+    --danger-light: #200A0A;
+    --success:      #4ADE80;
+    --success-light:#0A2010;
+    --s-pending-bg:    #2A1F07; --s-pending-text: #FCD34D; --s-pending-stripe: #F59E0B;
+    --s-approved-bg:   #071A10; --s-approved-text: #86EFAC; --s-approved-stripe: #22C55E;
+    --s-rejected-bg:   #1A0707; --s-rejected-text: #FCA5A5; --s-rejected-stripe: #EF4444;
+    --s-revision-bg:   #17102B; --s-revision-text: #C4B5FD; --s-revision-stripe: #8B5CF6;
+    --s-superseded-bg: #1A1D24; --s-superseded-text: #6B7280; --s-superseded-stripe: #374151;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #EEF1F6; --surface: #FFFFFF; --surface-doc: #F5F7FA; --surface-2: #F8F9FB;
+  --border: #D8DCE6; --border-light: #E8EBF0; --text: #0D1117; --text-2: #4A5368;
+  --text-3: #8A93A6; --accent: #1D4ED8; --accent-hover: #1741BB; --accent-light: #EEF3FD;
+  --accent-text: #1D4ED8; --danger: #DC2626; --danger-hover: #B91C1C;
+  --danger-light: #FEF2F2; --success: #16A34A; --success-light: #F0FDF4;
+  --s-pending-bg: #FEF3C7; --s-pending-text: #92400E; --s-pending-stripe: #F59E0B;
+  --s-approved-bg: #DCFCE7; --s-approved-text: #14532D; --s-approved-stripe: #16A34A;
+  --s-rejected-bg: #FEE2E2; --s-rejected-text: #991B1B; --s-rejected-stripe: #DC2626;
+  --s-revision-bg: #EDE9FE; --s-revision-text: #4C1D95; --s-revision-stripe: #7C3AED;
+  --s-superseded-bg: #F3F4F6; --s-superseded-text: #4B5563; --s-superseded-stripe: #9CA3AF;
+}
+:root[data-theme="dark"] {
+  --bg: #0E1118; --surface: #161C2A; --surface-doc: #1A2235; --surface-2: #1E2538;
+  --border: #2A3248; --border-light: #232B3E; --text: #E8EDF5; --text-2: #8A95AE;
+  --text-3: #5C657A; --accent: #3B82F6; --accent-hover: #2563EB; --accent-light: #162040;
+  --accent-text: #93C5FD; --danger: #F87171; --danger-hover: #EF4444;
+  --danger-light: #200A0A; --success: #4ADE80; --success-light: #0A2010;
+  --s-pending-bg: #2A1F07; --s-pending-text: #FCD34D; --s-pending-stripe: #F59E0B;
+  --s-approved-bg: #071A10; --s-approved-text: #86EFAC; --s-approved-stripe: #22C55E;
+  --s-rejected-bg: #1A0707; --s-rejected-text: #FCA5A5; --s-rejected-stripe: #EF4444;
+  --s-revision-bg: #17102B; --s-revision-text: #C4B5FD; --s-revision-stripe: #8B5CF6;
+  --s-superseded-bg: #1A1D24; --s-superseded-text: #6B7280; --s-superseded-stripe: #374151;
+}
+
+/* ── Reset & base ────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font);
+  font-size: 14.5px;
+  line-height: 1.65;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  direction: rtl;
+}
+button { font-family: inherit; cursor: pointer; border: none; }
+input, textarea { font-family: inherit; font-size: inherit; }
+a { color: var(--accent-text); text-decoration: none; }
+
+/* ── Typography scale ────────────────────────────────────────── */
+.t-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.t-mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+/* ── Layout shell ────────────────────────────────────────────── */
+#app { display: none; height: 100vh; overflow: hidden; }
+#app.active { display: flex; }
+
+/* sidebar on the right (natural RTL start) */
+.sidebar {
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(255,255,255,.06);
+  overflow: hidden;
+}
+.sidebar-logo {
+  padding: 18px 16px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.sidebar-logo h1 {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #E8EDF5;
+  line-height: 1.3;
+}
+.sidebar-logo small {
+  font-size: 11px;
+  color: var(--sidebar-muted);
+  display: block;
+  margin-top: 2px;
+}
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: var(--sidebar-text);
+  font-size: 13.5px;
+  background: transparent;
+  transition: background .15s;
+  width: 100%;
+  text-align: right;
+}
+.nav-item:hover, .nav-item.active {
+  background: rgba(255,255,255,.09);
+  color: #fff;
+}
+.nav-item .badge {
+  margin-right: auto;
+  margin-left: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 0 6px;
+  min-width: 20px;
+  text-align: center;
+  line-height: 18px;
+}
+.sidebar-footer {
+  padding: 12px 8px;
+  border-top: 1px solid rgba(255,255,255,.07);
+}
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: var(--sidebar-text);
+  font-size: 13px;
+}
+.sidebar-user .avatar {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.15);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff;
+  flex-shrink: 0;
+}
+.sidebar-user .name { flex: 1; font-weight: 500; }
+.btn-logout {
+  font-size: 11.5px;
+  color: var(--sidebar-muted);
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.btn-logout:hover { color: #fff; }
+
+/* main area */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* top bar */
+.topbar {
+  height: var(--header-h);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.topbar h2 {
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
+}
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+
+/* content split */
+.content-area {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* queue panel */
+.queue-panel {
+  width: 360px;
+  min-width: 320px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.queue-filters {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface);
+}
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+.search-box input {
+  border: none;
+  background: transparent;
+  flex: 1;
+  color: var(--text);
+  outline: none;
+  direction: rtl;
+}
+.search-box input::placeholder { color: var(--text-3); }
+.filter-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.pill {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all .13s;
+}
+.pill:hover { border-color: var(--accent); color: var(--accent-text); }
+.pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pill.all.active { background: var(--sidebar-bg); border-color: var(--sidebar-bg); }
+
+.queue-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.queue-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-light);
+  transition: background .12s;
+  position: relative;
+}
+.queue-item::after {
+  content: '';
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--stripe-color, transparent);
+}
+.queue-item:hover { background: var(--accent-light); }
+.queue-item.selected { background: var(--accent-light); }
+.queue-item.selected::after { width: 3px; }
+.qi-body { flex: 1; min-width: 0; }
+.qi-gene {
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: .01em;
+  margin-bottom: 2px;
+}
+.qi-preview {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qi-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+.status-pill::before {
+  content: '';
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sp-pending    { background: var(--s-pending-bg);    color: var(--s-pending-text); }
+.sp-approved   { background: var(--s-approved-bg);   color: var(--s-approved-text); }
+.sp-rejected   { background: var(--s-rejected-bg);   color: var(--s-rejected-text); }
+.sp-needs_revision { background: var(--s-revision-bg); color: var(--s-revision-text); }
+.sp-superseded { background: var(--s-superseded-bg); color: var(--s-superseded-text); }
+
+.queue-empty {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-3);
+  font-size: 13.5px;
+}
+.queue-empty .icon { font-size: 32px; margin-bottom: 10px; display: block; }
+
+/* detail panel */
+.detail-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.detail-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  gap: 12px;
+}
+.detail-empty .big-icon { font-size: 40px; }
+.detail-empty p { font-size: 13.5px; }
+
+.detail-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.dh-info { flex: 1; min-width: 0; }
+.dh-gene {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dh-meta {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 4px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dh-meta span { display: flex; align-items: center; gap: 4px; }
+
+.detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* document well */
+.doc-well {
+  background: var(--surface-doc);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-doc);
+  padding: 20px;
+}
+.doc-well-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.doc-text {
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.edit-area {
+  width: 100%;
+  min-height: 220px;
+  background: var(--surface);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 14px;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--text);
+  resize: vertical;
+  outline: none;
+  direction: rtl;
+}
+.edit-area:focus { box-shadow: 0 0 0 3px rgba(29,78,216,.15); }
+
+/* meta card */
+.meta-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px 20px;
+}
+.meta-field { display: flex; flex-direction: column; gap: 2px; }
+.meta-field .label { font-size: 11px; color: var(--text-3); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.meta-field .value { font-size: 13px; color: var(--text-2); }
+.meta-field .value.mono { font-family: var(--font-mono); font-size: 12px; }
+
+/* audit trail */
+.audit-trail {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.audit-trail-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.audit-event {
+  display: flex;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border-light);
+  align-items: flex-start;
+}
+.audit-event:last-child { border-bottom: none; }
+.audit-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+.audit-body { flex: 1; }
+.audit-action { font-size: 12.5px; font-weight: 600; }
+.audit-ts { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.audit-comment { font-size: 12px; color: var(--text-2); margin-top: 2px; font-style: italic; }
+.audit-empty { padding: 14px; font-size: 13px; color: var(--text-3); }
+
+/* action bar */
+.action-bar {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.action-bar .spacer { flex: 1; }
+
+/* buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .13s;
+  border: 1.5px solid transparent;
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-success {
+  background: var(--success);
+  color: #fff;
+  border-color: var(--success);
+}
+.btn-success:hover:not(:disabled) { filter: brightness(.9); }
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) { background: var(--danger-light); }
+.btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border-color: var(--border);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+/* ── Login screen ────────────────────────────────────────────── */
+#login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+#login.hidden { display: none; }
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 380px;
+}
+.login-card .logo-row {
+  text-align: center;
+  margin-bottom: 28px;
+}
+.login-card .logo-icon {
+  width: 48px; height: 48px;
+  background: var(--accent-light);
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  margin-bottom: 12px;
+}
+.login-card h1 { font-size: 17px; font-weight: 700; }
+.login-card .subtitle { font-size: 13px; color: var(--text-2); margin-top: 3px; }
+.form-group { margin-bottom: 14px; }
+.form-group label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 5px;
+}
+.form-group input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+  direction: rtl;
+  transition: border-color .15s;
+}
+.form-group input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(29,78,216,.12);
+}
+.btn-login {
+  width: 100%;
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  margin-top: 6px;
+}
+.login-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--danger-light);
+  border: 1px solid rgba(220,38,38,.25);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--danger);
+  display: none;
+}
+.login-error.show { display: block; }
+
+/* ── Modal overlay ───────────────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  width: 440px;
+  max-width: calc(100vw - 40px);
+}
+.modal h3 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+.modal .modal-desc { font-size: 13px; color: var(--text-2); margin-bottom: 16px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-start; margin-top: 16px; }
+
+/* comment textarea in modal */
+.modal textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--surface-2);
+  resize: vertical;
+  min-height: 80px;
+  outline: none;
+  direction: rtl;
+  line-height: 1.55;
+}
+.modal textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(29,78,216,.12); }
+.modal .form-group label { color: var(--text-2); }
+
+/* ── Toast ───────────────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 200;
+}
+.toast {
+  background: var(--sidebar-bg);
+  color: #E8EDF5;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--shadow);
+  animation: slideIn .2s ease;
+  max-width: 300px;
+}
+.toast.success { background: #065F46; }
+.toast.error   { background: #991B1B; }
+@keyframes slideIn {
+  from { transform: translateY(12px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ── Loading states ──────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+  opacity: .6;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--border-light) 25%, var(--surface-2) 50%, var(--border-light) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 4px;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* ── Scrollbars ──────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 800px) {
+  .sidebar { display: none; }
+  .queue-panel { width: 100%; min-width: 0; }
+  .detail-panel { display: none; }
+  .detail-panel.show-mobile { display: flex; width: 100%; }
+  .queue-panel.hide-mobile { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── Login ──────────────────────────────────────────── -->
+<div id="login">
+  <div class="login-card">
+    <div class="logo-row">
+      <div class="logo-icon">🧬</div>
+      <h1>פורטל סקירה רפואית</h1>
+      <div class="subtitle">כניסה לממשק סקירת טיוטות AI</div>
+    </div>
+    <div class="form-group">
+      <label for="uname">שם משתמש</label>
+      <input id="uname" type="text" autocomplete="username" placeholder="שם משתמש">
+    </div>
+    <div class="form-group">
+      <label for="upass">סיסמה</label>
+      <input id="upass" type="password" autocomplete="current-password" placeholder="••••••••">
+    </div>
+    <button class="btn btn-primary btn-login" id="btnLogin" onclick="doLogin()">כניסה</button>
+    <div class="login-error" id="loginError">שם משתמש או סיסמה שגויים.</div>
+  </div>
+</div>
+
+<!-- ── App shell ──────────────────────────────────────── -->
+<div id="app">
+  <!-- sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <h1>🧬 פורטל סקירה</h1>
+      <small>ייעוץ גנטי — AI Drafts</small>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" onclick="setView('queue')">
+        <span>📋</span>
+        <span>תור סקירה</span>
+        <span class="badge" id="pendingBadge">0</span>
+      </button>
+      <button class="nav-item" onclick="setView('approved')">
+        <span>✅</span>
+        <span>מאושרים</span>
+      </button>
+      <button class="nav-item" onclick="setView('all')">
+        <span>📁</span>
+        <span>כל הטיוטות</span>
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <div class="avatar" id="avatarInitial">?</div>
+        <span class="name" id="sidebarUsername">—</span>
+        <button class="btn-logout" onclick="doLogout()">יציאה</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="main">
+    <div class="topbar">
+      <h2 id="topbarTitle">תור סקירה</h2>
+      <div class="topbar-actions">
+        <button class="btn btn-ghost btn-sm" onclick="loadDrafts()">
+          <span>↻</span> רענון
+        </button>
+      </div>
+    </div>
+
+    <div class="content-area">
+      <!-- queue -->
+      <div class="queue-panel" id="queuePanel">
+        <div class="queue-filters">
+          <div class="search-box">
+            <span style="color:var(--text-3)">🔍</span>
+            <input type="text" id="searchInput" placeholder="חיפוש לפי גן..." oninput="filterQueue()" dir="rtl">
+          </div>
+          <div class="filter-pills">
+            <button class="pill all active" onclick="setStatusFilter(null, this)">הכל</button>
+            <button class="pill" onclick="setStatusFilter('pending', this)">ממתין</button>
+            <button class="pill" onclick="setStatusFilter('needs_revision', this)">לתיקון</button>
+            <button class="pill" onclick="setStatusFilter('approved', this)">מאושר</button>
+            <button class="pill" onclick="setStatusFilter('rejected', this)">נדחה</button>
+          </div>
+        </div>
+        <div class="queue-list" id="queueList">
+          <div class="queue-empty">
+            <span class="icon">⏳</span>
+            טוען טיוטות...
+          </div>
+        </div>
+      </div>
+
+      <!-- detail -->
+      <div class="detail-panel" id="detailPanel">
+        <div class="detail-empty" id="detailEmpty">
+          <span class="big-icon">📄</span>
+          <p>בחרו טיוטה מהרשימה לצפייה ועריכה</p>
+        </div>
+
+        <div id="detailContent" style="display:none; flex:1; display:none; flex-direction:column; overflow:hidden;">
+          <div class="detail-header">
+            <div class="dh-info">
+              <div class="dh-gene" id="dhGene">—</div>
+              <div class="dh-meta" id="dhMeta"></div>
+            </div>
+            <div id="dhStatus"></div>
+          </div>
+
+          <div class="detail-body" id="detailBody"></div>
+
+          <div class="action-bar" id="actionBar"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Action modal ───────────────────────────────────── -->
+<div class="modal-overlay" id="actionModal">
+  <div class="modal">
+    <h3 id="modalTitle">אישור פעולה</h3>
+    <div class="modal-desc" id="modalDesc"></div>
+    <div class="form-group" id="modalCommentGroup">
+      <label>הערה (אופציונלי)</label>
+      <textarea id="modalComment" rows="3" placeholder="הסבר קצר לגבי ההחלטה..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="modalConfirmBtn">אישור</button>
+      <button class="btn btn-ghost" onclick="closeModal()">ביטול</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast container ────────────────────────────────── -->
+<div class="toast-container" id="toasts"></div>
+
+<script>
+/* ── State ───────────────────────────────────────────────────── */
+const S = {
+  identity: null,
+  drafts: [],
+  filtered: [],
+  selected: null,
+  statusFilter: null,
+  viewMode: 'queue',
+  editing: false,
+  editText: '',
+};
+
+const STATUS_HE = {
+  pending: 'ממתין לסקירה',
+  approved: 'מאושר',
+  rejected: 'נדחה',
+  needs_revision: 'נדרש תיקון',
+  superseded: 'הוחלף',
+};
+const STATUS_CLASS = {
+  pending: 'sp-pending', approved: 'sp-approved',
+  rejected: 'sp-rejected', needs_revision: 'sp-needs_revision',
+  superseded: 'sp-superseded',
+};
+const STATUS_STRIPE = {
+  pending: 'var(--s-pending-stripe)', approved: 'var(--s-approved-stripe)',
+  rejected: 'var(--s-rejected-stripe)', needs_revision: 'var(--s-revision-stripe)',
+  superseded: 'var(--s-superseded-stripe)',
+};
+const AUDIT_COLOR = {
+  pending: '#9CA3AF', approved: '#16A34A', rejected: '#DC2626',
+  needs_revision: '#7C3AED', superseded: '#6B7280',
+};
+
+/* ── API helpers ─────────────────────────────────────────────── */
+const API_BASE = '/api/physician';
+
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(API_BASE + path, {
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/* ── Auth ────────────────────────────────────────────────────── */
+async function doLogin() {
+  const btn = document.getElementById('btnLogin');
+  const err = document.getElementById('loginError');
+  const username = document.getElementById('uname').value.trim();
+  const password = document.getElementById('upass').value;
+  if (!username || !password) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> מתחבר...';
+  err.classList.remove('show');
+  try {
+    const data = await apiFetch('/login', {
+      method: 'POST',
+      body: { username, password },
+    });
+    S.identity = data.identity || username;
+    enterApp();
+  } catch (e) {
+    err.classList.add('show');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'כניסה';
+  }
+}
+
+async function doLogout() {
+  await apiFetch('/logout', { method: 'POST' }).catch(() => {});
+  S.identity = null;
+  document.getElementById('app').classList.remove('active');
+  document.getElementById('login').classList.remove('hidden');
+}
+
+document.getElementById('upass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+
+/* ── App entry ───────────────────────────────────────────────── */
+async function enterApp() {
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('app').classList.add('active');
+  document.getElementById('sidebarUsername').textContent = S.identity;
+  document.getElementById('avatarInitial').textContent =
+    (S.identity || '?')[0].toUpperCase();
+  await loadDrafts();
+}
+
+async function checkSession() {
+  try {
+    const data = await apiFetch('/me');
+    S.identity = data.identity;
+    enterApp();
+  } catch {
+    /* not logged in — show login */
+  }
+}
+
+/* ── Draft loading ───────────────────────────────────────────── */
+async function loadDrafts() {
+  const list = document.getElementById('queueList');
+  list.innerHTML = '<div class="queue-empty"><span class="icon">⏳</span> טוען...</div>';
+  try {
+    const data = await apiFetch('/drafts?limit=200');
+    S.drafts = data.drafts || [];
+    updatePendingBadge();
+    renderQueue();
+  } catch (e) {
+    list.innerHTML = `<div class="queue-empty"><span class="icon">⚠️</span> שגיאה בטעינה: ${e.message}</div>`;
+  }
+}
+
+function updatePendingBadge() {
+  const count = S.drafts.filter(d => d.review_status === 'pending' || d.review_status === 'needs_revision').length;
+  document.getElementById('pendingBadge').textContent = count;
+}
+
+/* ── View switching ──────────────────────────────────────────── */
+const VIEW_STATUS = { queue: null, approved: 'approved', all: null };
+const VIEW_FILTER_MAP = {
+  queue: d => d.review_status === 'pending' || d.review_status === 'needs_revision',
+  approved: d => d.review_status === 'approved',
+  all: () => true,
+};
+const VIEW_TITLE = { queue: 'תור סקירה', approved: 'טיוטות מאושרות', all: 'כל הטיוטות' };
+
+function setView(view) {
+  S.viewMode = view;
+  document.getElementById('topbarTitle').textContent = VIEW_TITLE[view];
+  document.querySelectorAll('.nav-item').forEach((el, i) => {
+    el.classList.toggle('active', ['queue','approved','all'][i] === view);
+  });
+  renderQueue();
+}
+
+/* ── Queue rendering ─────────────────────────────────────────── */
+let _activeStatusFilter = null;
+
+function setStatusFilter(status, btn) {
+  _activeStatusFilter = status;
+  document.querySelectorAll('.filter-pills .pill').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  renderQueue();
+}
+
+function filterQueue() {
+  renderQueue();
+}
+
+function renderQueue() {
+  const search = (document.getElementById('searchInput').value || '').toLowerCase();
+  const viewFn = VIEW_FILTER_MAP[S.viewMode];
+  let items = S.drafts.filter(viewFn);
+  if (_activeStatusFilter) items = items.filter(d => d.review_status === _activeStatusFilter);
+  if (search) items = items.filter(d =>
+    (d.gene_symbol || '').toLowerCase().includes(search) ||
+    (d.draft_type || '').toLowerCase().includes(search)
+  );
+  S.filtered = items;
+
+  const list = document.getElementById('queueList');
+  if (!items.length) {
+    list.innerHTML = '<div class="queue-empty"><span class="icon">📭</span> אין טיוטות תואמות</div>';
+    return;
+  }
+
+  list.innerHTML = items.map(d => `
+    <div class="queue-item${S.selected?.id === d.id ? ' selected' : ''}"
+         style="--stripe-color: ${STATUS_STRIPE[d.review_status] || 'transparent'}"
+         onclick="selectDraft('${d.id}')">
+      <div class="qi-body">
+        <div class="qi-gene">${d.gene_symbol || d.draft_type || '—'}</div>
+        <div class="qi-preview">${escHtml((d.original_ai_text || '').slice(0, 90))}…</div>
+        <div class="qi-meta">
+          <span class="status-pill ${STATUS_CLASS[d.review_status]}">${STATUS_HE[d.review_status] || d.review_status}</span>
+          <span>${fmtDate(d.created_at)}</span>
+          ${d.seen_count > 1 ? `<span title="נשלח ${d.seen_count} פעמים">×${d.seen_count}</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+/* ── Draft detail ────────────────────────────────────────────── */
+async function selectDraft(id) {
+  const draft = S.drafts.find(d => d.id === id);
+  if (!draft) return;
+  S.selected = draft;
+  S.editing = false;
+  renderQueue(); // update selection highlight
+  await renderDetail(draft);
+}
+
+async function renderDetail(draft) {
+  document.getElementById('detailEmpty').style.display = 'none';
+  const dc = document.getElementById('detailContent');
+  dc.style.display = 'flex';
+  dc.style.flexDirection = 'column';
+  dc.style.overflow = 'hidden';
+  dc.style.flex = '1';
+
+  // Header
+  document.getElementById('dhGene').innerHTML =
+    `${draft.gene_symbol || '—'} <span style="font-weight:400;font-size:14px;color:var(--text-2)">${draft.draft_type || ''}</span>`;
+  document.getElementById('dhMeta').innerHTML = `
+    <span>נוצר: ${fmtDate(draft.created_at)}</span>
+    ${draft.reviewed_at ? `<span>נסקר: ${fmtDate(draft.reviewed_at)}</span>` : ''}
+    ${draft.reviewed_by ? `<span>על ידי: ${escHtml(draft.reviewed_by)}</span>` : ''}
+    ${draft.model_name ? `<span class="t-mono">${escHtml(draft.model_name)}</span>` : ''}
+  `;
+  document.getElementById('dhStatus').innerHTML =
+    `<span class="status-pill ${STATUS_CLASS[draft.review_status]}">${STATUS_HE[draft.review_status]}</span>`;
+
+  // Body
+  const body = document.getElementById('detailBody');
+  const audit = await loadAudit(draft.id);
+  const effectiveText = draft.physician_edited_text || draft.original_ai_text || '';
+
+  body.innerHTML = '';
+
+  // Document well
+  const well = document.createElement('div');
+  well.className = 'doc-well';
+  well.id = 'docWell';
+
+  if (S.editing) {
+    well.innerHTML = `
+      <div class="doc-well-label">✏️ עריכת טיוטה</div>
+      <textarea class="edit-area" id="editArea" dir="rtl">${escHtml(effectiveText)}</textarea>
+    `;
+  } else {
+    well.innerHTML = `
+      <div class="doc-well-label">
+        📝 טיוטת AI
+        ${draft.physician_edited_text ? '<span style="color:var(--success);font-size:11px;margin-right:6px">● נערכה</span>' : ''}
+      </div>
+      <div class="doc-text" dir="rtl">${escHtml(effectiveText)}</div>
+    `;
+  }
+  body.appendChild(well);
+
+  // Original text (if edited)
+  if (draft.physician_edited_text && !S.editing) {
+    const orig = document.createElement('details');
+    orig.style.cssText = 'margin-top:2px;';
+    orig.innerHTML = `
+      <summary style="font-size:12px;color:var(--text-3);cursor:pointer;padding:6px 0;">טקסט מקורי AI (לפני עריכה)</summary>
+      <div class="doc-well" style="margin-top:8px;opacity:.7">
+        <div class="doc-text" dir="rtl" style="font-size:13px">${escHtml(draft.original_ai_text)}</div>
+      </div>
+    `;
+    body.appendChild(orig);
+  }
+
+  // Meta card
+  const meta = document.createElement('div');
+  meta.className = 'meta-card';
+  meta.innerHTML = `
+    <div class="meta-field"><span class="label">גן</span><span class="value">${escHtml(draft.gene_symbol || '—')}</span></div>
+    <div class="meta-field"><span class="label">סוג</span><span class="value">${escHtml(draft.draft_type || '—')}</span></div>
+    <div class="meta-field"><span class="label">ספק AI</span><span class="value">${escHtml(draft.model_provider || '—')}</span></div>
+    <div class="meta-field"><span class="label">מודל</span><span class="value mono">${escHtml(draft.model_name || '—')}</span></div>
+    <div class="meta-field"><span class="label">גרסת בטיחות</span><span class="value mono">${escHtml(draft.safety_policy_version || '—')}</span></div>
+    <div class="meta-field"><span class="label">hash</span><span class="value mono">${escHtml((draft.content_hash || '').slice(0, 12))}…</span></div>
+    ${draft.review_comment ? `<div class="meta-field" style="grid-column:1/-1"><span class="label">הערת רופא</span><span class="value" style="color:var(--text)">${escHtml(draft.review_comment)}</span></div>` : ''}
+  `;
+  body.appendChild(meta);
+
+  // Audit trail
+  if (audit.length) {
+    const at = document.createElement('div');
+    at.className = 'audit-trail';
+    at.innerHTML = `<div class="audit-trail-header">יומן פעולות</div>` +
+      audit.map(ev => `
+        <div class="audit-event">
+          <div class="audit-dot" style="background:${AUDIT_COLOR[ev.new_status] || '#9CA3AF'}"></div>
+          <div class="audit-body">
+            <div class="audit-action">${STATUS_HE[ev.new_status] || ev.action}${ev.text_was_edited ? ' (עם עריכה)' : ''}</div>
+            <div class="audit-ts">${fmtDate(ev.timestamp)} ${ev.reviewer_identity ? '· ' + escHtml(ev.reviewer_identity) : ''}</div>
+            ${ev.review_comment ? `<div class="audit-comment">"${escHtml(ev.review_comment)}"</div>` : ''}
+          </div>
+        </div>
+      `).join('');
+    body.appendChild(at);
+  }
+
+  // Action bar
+  renderActionBar(draft);
+}
+
+async function loadAudit(draftId) {
+  try {
+    const data = await apiFetch(`/drafts/${draftId}/audit`);
+    return data.audit || [];
+  } catch { return []; }
+}
+
+function renderActionBar(draft) {
+  const bar = document.getElementById('actionBar');
+  const status = draft.review_status;
+  const canAct = status === 'pending' || status === 'needs_revision';
+
+  if (S.editing) {
+    bar.innerHTML = `
+      <button class="btn btn-primary" onclick="submitEdit()">שמירת עריכה</button>
+      <button class="btn btn-ghost" onclick="cancelEdit()">ביטול</button>
+    `;
+    return;
+  }
+
+  let html = '';
+  if (canAct) {
+    html += `<button class="btn btn-ghost btn-sm" onclick="startEdit()">✏️ עריכה</button>`;
+    html += `<div class="spacer"></div>`;
+    html += `<button class="btn btn-ghost btn-sm" onclick="openModal('needs_revision')">🔄 לתיקון</button>`;
+    html += `<button class="btn btn-danger btn-sm" onclick="openModal('rejected')">✕ דחייה</button>`;
+    html += `<button class="btn btn-success btn-sm" onclick="openModal('approved')">✓ אישור</button>`;
+  } else if (status === 'approved') {
+    html += `<div class="spacer"></div>`;
+    html += `<span style="font-size:12.5px;color:var(--success);">✓ טיוטה זו מאושרת ופעילה</span>`;
+  } else if (status === 'rejected') {
+    html += `<div class="spacer"></div>`;
+    html += `<span style="font-size:12.5px;color:var(--text-3);">טיוטה זו נדחתה</span>`;
+  } else {
+    html += `<div class="spacer"></div>`;
+    html += `<span style="font-size:12.5px;color:var(--text-3);">${STATUS_HE[status]}</span>`;
+  }
+  bar.innerHTML = html;
+}
+
+/* ── Editing ─────────────────────────────────────────────────── */
+function startEdit() {
+  S.editing = true;
+  renderDetail(S.selected);
+}
+
+function cancelEdit() {
+  S.editing = false;
+  renderDetail(S.selected);
+}
+
+async function submitEdit() {
+  const text = document.getElementById('editArea')?.value?.trim();
+  if (!text) return;
+  S.editText = text;
+  S.editing = false;
+  // Store locally, user still needs to approve/reject to submit
+  const draft = S.selected;
+  draft._pendingEdit = text;
+  toast('עריכה נשמרה. לחצו אישור כדי לשמור בשרת.', 'success');
+  renderDetail(draft);
+}
+
+/* ── Modal / actions ─────────────────────────────────────────── */
+const MODAL_CONFIG = {
+  approved: {
+    title: 'אישור טיוטה',
+    desc: 'הטיוטה תסומן כמאושרת ותוצג למשתמשים (בהתאם להגדרות נראות). האם להמשיך?',
+    btnClass: 'btn-success', btnText: '✓ אישור',
+  },
+  rejected: {
+    title: 'דחיית טיוטה',
+    desc: 'הטיוטה תסומן כנדחית ולא תוצג למשתמשים. פעולה זו אינה הפיכה.',
+    btnClass: 'btn-danger', btnText: '✕ דחייה',
+  },
+  needs_revision: {
+    title: 'בקשת תיקון',
+    desc: 'הטיוטה תחזור לתור הסקירה עם סימון "נדרש תיקון".',
+    btnClass: 'btn-primary', btnText: '🔄 שלח לתיקון',
+  },
+};
+
+let _pendingAction = null;
+
+function openModal(action) {
+  _pendingAction = action;
+  const cfg = MODAL_CONFIG[action];
+  document.getElementById('modalTitle').textContent = cfg.title;
+  document.getElementById('modalDesc').textContent = cfg.desc;
+  document.getElementById('modalComment').value = '';
+  const btn = document.getElementById('modalConfirmBtn');
+  btn.className = `btn ${cfg.btnClass}`;
+  btn.textContent = cfg.btnText;
+  btn.onclick = confirmAction;
+  document.getElementById('actionModal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('actionModal').classList.remove('show');
+  _pendingAction = null;
+}
+
+async function confirmAction() {
+  if (!_pendingAction || !S.selected) return;
+  const comment = document.getElementById('modalComment').value.trim();
+  const editedText = S.selected._pendingEdit || null;
+  closeModal();
+
+  const btn = document.querySelector(`[onclick="openModal('${_pendingAction}')"]`);
+  try {
+    const data = await apiFetch(`/drafts/${S.selected.id}/review`, {
+      method: 'POST',
+      body: {
+        new_status: _pendingAction,
+        review_comment: comment || null,
+        physician_edited_text: editedText,
+      },
+    });
+    const updated = data.draft;
+    if (updated) {
+      const idx = S.drafts.findIndex(d => d.id === updated.id);
+      if (idx !== -1) S.drafts[idx] = updated;
+      S.selected = updated;
+      delete S.selected._pendingEdit;
+      updatePendingBadge();
+      renderQueue();
+      renderDetail(updated);
+      toast(
+        _pendingAction === 'approved' ? 'הטיוטה אושרה ✓' :
+        _pendingAction === 'rejected' ? 'הטיוטה נדחתה' :
+        'הטיוטה הועברה לתיקון',
+        _pendingAction === 'approved' ? 'success' : 'default'
+      );
+    }
+  } catch (e) {
+    toast('שגיאה: ' + e.message, 'error');
+  }
+}
+
+/* ── Utils ───────────────────────────────────────────────────── */
+function escHtml(str) {
+  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('he-IL', { day:'2-digit', month:'2-digit', year:'2-digit' })
+           + ' ' + d.toLocaleTimeString('he-IL', { hour:'2-digit', minute:'2-digit' });
+  } catch { return iso; }
+}
+
+function toast(msg, type = 'default') {
+  const c = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = `toast${type !== 'default' ? ' ' + type : ''}`;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+
+/* ── Init ────────────────────────────────────────────────────── */
+checkSession();
+</script>
+</body>
+</html>

@@ -22,16 +22,19 @@ import logging
 import os
 from typing import List, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field, model_serializer
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from app import retriever, responder, policy, session_store, kb, counseling_engine, gene_index
+from app import review_db as _review_db
+from app import physician_auth as _physician_auth
 from app import health as _health_module
 from app import feedback as _feedback_module
 from app.upload_parser import parse_uploaded_file
@@ -71,6 +74,18 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
+)
+
+# SessionMiddleware for the physician review portal.
+# get_session_secret() uses REVIEW_SESSION_SECRET env var, falling back to an
+# ephemeral random key (dev only) — sessions won't survive restarts in that case.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_physician_auth.get_session_secret(),
+    session_cookie="physician_session",
+    max_age=8 * 3600,
+    https_only=os.environ.get("HTTPS_ONLY_COOKIES", "").lower() in ("1", "true", "yes"),
+    same_site="lax",
 )
 
 # ---------------------------------------------------------------------------
@@ -1689,3 +1704,155 @@ def ask_report_session(request: AskReportSessionRequest):
         "policy_flags":     pol.flags,
         "redirect_message": pol.redirect_message,
     }
+
+
+# ---------------------------------------------------------------------------
+# Physician review portal
+# ---------------------------------------------------------------------------
+# Enabled only when REVIEW_PORTAL_ENABLED=true + credentials configured.
+# All /api/physician/* endpoints require a valid physician session.
+# The /physician route serves the SPA.
+# ---------------------------------------------------------------------------
+
+_PORTAL_ENABLED = _physician_auth.portal_enabled()
+
+if not _PORTAL_ENABLED:
+    logger.info(
+        "Physician portal disabled. Set REVIEW_PORTAL_ENABLED=true and configure "
+        "REVIEWER_USERNAME, REVIEWER_PASSWORD_HASH, REVIEW_SESSION_SECRET to enable."
+    )
+
+
+def _portal_gate():
+    """Raise 503 when the portal is not enabled."""
+    if not _PORTAL_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Physician portal is not enabled on this server.",
+        )
+
+
+@app.get("/physician", include_in_schema=False)
+def physician_portal():
+    """Serve the physician review SPA."""
+    _portal_gate()
+    portal_path = _STATIC_DIR / "physician.html"
+    if not portal_path.exists():
+        raise HTTPException(status_code=503, detail="Physician portal page not found.")
+    return FileResponse(str(portal_path))
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────────
+
+class PhysicianLoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=120)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+@app.post("/api/physician/login", include_in_schema=False)
+async def physician_login(body: PhysicianLoginRequest, request: Request):
+    _portal_gate()
+    if not _physician_auth.authenticate(body.username, body.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    _physician_auth.create_physician_session(request, body.username)
+    logger.info("Physician login: %s", body.username)
+    return {"ok": True, "identity": body.username}
+
+
+@app.post("/api/physician/logout", include_in_schema=False)
+async def physician_logout(request: Request):
+    identity = _physician_auth.get_physician_identity(request)
+    _physician_auth.invalidate_physician_session(request)
+    if identity:
+        logger.info("Physician logout: %s", identity)
+    return {"ok": True}
+
+
+@app.get("/api/physician/me", include_in_schema=False)
+async def physician_me(request: Request):
+    _portal_gate()
+    identity = _physician_auth.get_physician_identity(request)
+    if not identity:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    return {
+        "identity": identity,
+        "pending_count": _review_db.pending_count(),
+    }
+
+
+# ── Draft endpoints ───────────────────────────────────────────────────────
+
+@app.get("/api/physician/drafts", include_in_schema=False)
+async def physician_list_drafts(
+    request: Request,
+    status: Optional[str] = Query(None),
+    gene: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    _portal_gate()
+    identity = _physician_auth.require_physician(request)
+    drafts = _review_db.list_drafts(
+        status=status,
+        gene_symbol=gene,
+        limit=limit,
+        offset=offset,
+    )
+    return {"drafts": drafts, "total": len(drafts)}
+
+
+@app.get("/api/physician/drafts/{draft_id}", include_in_schema=False)
+async def physician_get_draft(draft_id: str, request: Request):
+    _portal_gate()
+    _physician_auth.require_physician(request)
+    draft = _review_db.get_draft(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found.")
+    return {"draft": draft}
+
+
+@app.get("/api/physician/drafts/{draft_id}/audit", include_in_schema=False)
+async def physician_get_audit(draft_id: str, request: Request):
+    _portal_gate()
+    _physician_auth.require_physician(request)
+    audit = _review_db.get_audit_trail(draft_id)
+    return {"draft_id": draft_id, "audit": audit}
+
+
+class PhysicianReviewRequest(BaseModel):
+    new_status: str = Field(..., description="approved | rejected | needs_revision")
+    review_comment: Optional[str] = Field(None, max_length=1000)
+    physician_edited_text: Optional[str] = Field(None, max_length=20000)
+
+
+@app.post("/api/physician/drafts/{draft_id}/review", include_in_schema=False)
+async def physician_review_draft(
+    draft_id: str,
+    body: PhysicianReviewRequest,
+    request: Request,
+):
+    _portal_gate()
+    identity = _physician_auth.require_physician(request)
+
+    if body.new_status not in _review_db.VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status: {body.new_status!r}")
+
+    try:
+        updated = _review_db.update_draft_status(
+            draft_id,
+            new_status=body.new_status,
+            reviewer_identity=identity,
+            review_comment=body.review_comment,
+            physician_edited_text=body.physician_edited_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Review action failed on the server.")
+
+    logger.info(
+        "Physician %s set draft %s → %s",
+        identity, draft_id[:8], body.new_status,
+    )
+    return {"ok": True, "draft": updated}
