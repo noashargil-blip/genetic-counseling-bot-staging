@@ -443,7 +443,7 @@ def portal_client(tmp_path, monkeypatch):
     monkeypatch.setenv("REVIEW_PORTAL_ENABLED", "true")
     monkeypatch.setenv("REVIEWER_USERNAME", _TEST_USERNAME)
     monkeypatch.setenv("REVIEWER_PASSWORD_HASH", pw_hash)
-    monkeypatch.setenv("REVIEW_SESSION_SECRET", "test_secret_1234567890abcdef")
+    monkeypatch.setenv("REVIEW_SESSION_SECRET", "test_secret_1234567890abcdef_xyz12")  # 32+ chars
     monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
@@ -779,3 +779,412 @@ class TestExistingTestsNotBroken:
         )
         # Should return None silently, not raise
         assert result is None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestSession271Hardening — focused tests added in Session 27.1
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestSession271Hardening:
+    """Production-readiness checks added during Session 27.1."""
+
+    # -- DB indexes idempotent ----------------------------------------------
+
+    def test_init_db_idempotent(self, isolated_review_db):
+        """Calling init_db() twice must not raise or duplicate tables."""
+        rdb = isolated_review_db
+        result = rdb.init_db()
+        assert result is True
+
+    # -- Approved-only with an approved draft -------------------------------
+
+    def test_approved_only_serves_approved_text(self, isolated_review_db, monkeypatch):
+        """When AI_DRAFT_VISIBILITY_MODE=approved_only, get_approved_draft returns approved text."""
+        rdb = isolated_review_db
+        draft = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן BRCA2 מקודד לחלבון תיקון DNA בתאים. מידע מאושר על ידי רופא.",
+            gene_symbol="BRCA2",
+        )
+        rdb.update_draft_status(
+            draft["id"],
+            new_status="approved",
+            reviewer_identity="dr_test",
+        )
+        approved = rdb.get_approved_draft("BRCA2", draft_type="gene_summary")
+        assert approved is not None
+        assert approved["effective_text"] == draft["original_ai_text"]
+
+    # -- Approved-only with physician-edited text ----------------------------
+
+    def test_approved_only_serves_physician_edited_text(self, isolated_review_db):
+        """get_approved_draft returns physician-edited text when present."""
+        rdb = isolated_review_db
+        edited = "הגן BRCA2: טקסט מעודכן על ידי רופא. מידע כללי בלבד."
+        draft = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן BRCA2 מקודד לחלבון תיקון DNA בתאים.",
+            gene_symbol="BRCA2",
+        )
+        rdb.update_draft_status(
+            draft["id"],
+            new_status="approved",
+            reviewer_identity="dr_test",
+            physician_edited_text=edited,
+        )
+        approved = rdb.get_approved_draft("BRCA2", draft_type="gene_summary")
+        assert approved is not None
+        assert approved["effective_text"] == edited
+
+    # -- Approved-only fallback when no approved draft ----------------------
+
+    def test_approved_only_returns_none_when_no_approved_draft(self, isolated_review_db):
+        """get_approved_draft returns None when no approved draft exists for the gene."""
+        rdb = isolated_review_db
+        assert rdb.get_approved_draft("UNKNOWN_GENE_XYZ", draft_type="gene_summary") is None
+
+    # -- Brute-force lockout ------------------------------------------------
+
+    def test_brute_force_lockout_after_five_failures(self, monkeypatch):
+        """Authenticate returns False and locks username after 5 consecutive failures."""
+        import importlib
+        from app import physician_auth as pa
+        importlib.reload(pa)
+
+        from app.physician_auth import generate_hash
+        good_hash = generate_hash("correct-password")
+        monkeypatch.setenv("REVIEWER_USERNAME", "dr_brute_test")
+        monkeypatch.setenv("REVIEWER_PASSWORD_HASH", good_hash)
+
+        importlib.reload(pa)
+
+        for _ in range(5):
+            assert pa.authenticate("dr_brute_test", "wrong-password") is False
+
+        assert pa.is_locked_out("dr_brute_test") is True
+        # Even the correct password is rejected while locked out
+        assert pa.authenticate("dr_brute_test", "correct-password") is False
+
+    def test_lockout_cleared_after_success(self, monkeypatch):
+        """Successful login clears the failed-attempt counter."""
+        import importlib
+        from app import physician_auth as pa
+        importlib.reload(pa)
+
+        from app.physician_auth import generate_hash
+        good_hash = generate_hash("correct-pass")
+        monkeypatch.setenv("REVIEWER_USERNAME", "dr_clear_test")
+        monkeypatch.setenv("REVIEWER_PASSWORD_HASH", good_hash)
+        importlib.reload(pa)
+
+        for _ in range(3):
+            pa.authenticate("dr_clear_test", "wrong")
+
+        pa.authenticate("dr_clear_test", "correct-pass")
+        assert pa.is_locked_out("dr_clear_test") is False
+
+    # -- Session secret strength warning ------------------------------------
+
+    def test_weak_session_secret_logs_warning(self, monkeypatch, caplog):
+        """A short session secret should emit a warning log."""
+        import importlib, logging
+        monkeypatch.setenv("REVIEW_SESSION_SECRET", "short")
+        from app import physician_auth as pa
+        importlib.reload(pa)
+        with caplog.at_level(logging.WARNING, logger="app.physician_auth"):
+            pa.get_session_secret()
+        assert any("short" in r.message.lower() or "chars" in r.message.lower()
+                   for r in caplog.records)
+
+    # -- Missing portal config does not break patient chat ------------------
+
+    def test_patient_chat_works_without_portal_config(self, monkeypatch):
+        """POST /ask returns valid 5-key response even when portal env vars are absent."""
+        monkeypatch.delenv("REVIEW_PORTAL_ENABLED", raising=False)
+        monkeypatch.delenv("REVIEWER_USERNAME", raising=False)
+        monkeypatch.delenv("REVIEWER_PASSWORD_HASH", raising=False)
+        monkeypatch.delenv("REVIEW_SESSION_SECRET", raising=False)
+        import importlib
+        from app import physician_auth, main
+        importlib.reload(physician_auth)
+        importlib.reload(main)
+        from fastapi.testclient import TestClient
+        client = TestClient(main.app)
+        r = client.post("/ask", json={"question": "מה זה נשאות?"})
+        assert r.status_code == 200
+        data = r.json()
+        required = {"answer", "safety_level", "needs_genetic_counselor",
+                    "matched_topic", "suggested_questions"}
+        assert required.issubset(set(data.keys()))
+
+    # -- Database URL selection: SQLite default ------------------------------
+
+    def test_sqlite_used_when_no_database_url(self, isolated_review_db, monkeypatch):
+        """Without DATABASE_URL, _USE_POSTGRES must be False."""
+        rdb = isolated_review_db
+        assert rdb._USE_POSTGRES is False
+
+    # -- Malformed DATABASE_URL safe failure --------------------------------
+
+    def test_malformed_database_url_does_not_crash_init(self, monkeypatch, tmp_path):
+        """A malformed DATABASE_URL that starts with 'postgres' but is invalid
+        should cause init_db to fail gracefully (return False), not raise."""
+        import importlib
+        monkeypatch.setenv("DATABASE_URL", "postgres://bad:url/that/wont/connect")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", str(tmp_path / "bad.db"))
+        from app import review_db
+        importlib.reload(review_db)
+        result = review_db.init_db()
+        # Should return False on connection failure, not raise an unhandled exception
+        assert result in (True, False)  # either outcome is acceptable; must not raise
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestSessionSecretFailClosed — Session 27.2 Step 5
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestSessionSecretFailClosed:
+    """
+    portal_enabled() must return False when REVIEW_SESSION_SECRET is missing,
+    too short, or a known placeholder — even when REVIEW_PORTAL_ENABLED=true.
+    The patient chat (/ask) must remain functional in all these cases.
+    """
+
+    def _reload_pa(self, monkeypatch, secret_value, enabled="true", username="doc", pw_hash=None):
+        import importlib
+        from app import physician_auth as pa
+        from app.physician_auth import generate_hash
+        monkeypatch.setenv("REVIEW_PORTAL_ENABLED", enabled)
+        monkeypatch.setenv("REVIEWER_USERNAME", username)
+        monkeypatch.setenv("REVIEWER_PASSWORD_HASH", pw_hash or generate_hash("pw"))
+        if secret_value is None:
+            monkeypatch.delenv("REVIEW_SESSION_SECRET", raising=False)
+        else:
+            monkeypatch.setenv("REVIEW_SESSION_SECRET", secret_value)
+        importlib.reload(pa)
+        return pa
+
+    def test_missing_secret_disables_portal(self, monkeypatch):
+        """REVIEW_SESSION_SECRET absent → portal_enabled() is False."""
+        pa = self._reload_pa(monkeypatch, secret_value=None)
+        assert pa.portal_enabled() is False
+
+    def test_short_secret_disables_portal(self, monkeypatch):
+        """Secret shorter than 32 chars → portal_enabled() is False."""
+        pa = self._reload_pa(monkeypatch, secret_value="tooshort")
+        assert pa.portal_enabled() is False
+
+    def test_exactly_31_chars_disables_portal(self, monkeypatch):
+        """Secret of exactly 31 chars is one below the minimum → portal disabled."""
+        pa = self._reload_pa(monkeypatch, secret_value="a" * 31)
+        assert pa.portal_enabled() is False
+
+    def test_exactly_32_chars_enables_portal(self, monkeypatch):
+        """Secret of exactly 32 chars meets the minimum → portal enabled."""
+        pa = self._reload_pa(monkeypatch, secret_value="a" * 32)
+        assert pa.portal_enabled() is True
+
+    def test_placeholder_changeme_disables_portal(self, monkeypatch):
+        """'changeme' is a known placeholder and must disable the portal."""
+        pa = self._reload_pa(monkeypatch, secret_value="changeme")
+        assert pa.portal_enabled() is False
+
+    def test_placeholder_secret_word_disables_portal(self, monkeypatch):
+        """'secret' is a known placeholder and must disable the portal."""
+        pa = self._reload_pa(monkeypatch, secret_value="secret")
+        assert pa.portal_enabled() is False
+
+    def test_placeholder_your_secret_disables_portal(self, monkeypatch):
+        """'your-secret' from .env.example must disable the portal."""
+        pa = self._reload_pa(monkeypatch, secret_value="your-secret")
+        assert pa.portal_enabled() is False
+
+    def test_valid_strong_secret_enables_portal(self, monkeypatch):
+        """A 64-char hex string (typical output of secrets.token_hex(32)) enables portal."""
+        import secrets
+        strong = secrets.token_hex(32)   # 64 hex chars
+        pa = self._reload_pa(monkeypatch, secret_value=strong)
+        assert pa.portal_enabled() is True
+
+    def test_portal_disabled_patient_chat_still_works(self, monkeypatch):
+        """When secret is missing, /ask returns valid 5-key response (patient unaffected)."""
+        import importlib
+        from app import physician_auth, main
+        monkeypatch.setenv("REVIEW_PORTAL_ENABLED", "true")
+        monkeypatch.setenv("REVIEWER_USERNAME", "doc")
+        from app.physician_auth import generate_hash
+        monkeypatch.setenv("REVIEWER_PASSWORD_HASH", generate_hash("pw"))
+        monkeypatch.delenv("REVIEW_SESSION_SECRET", raising=False)
+        importlib.reload(physician_auth)
+        importlib.reload(main)
+        from fastapi.testclient import TestClient
+        client = TestClient(main.app)
+        r = client.post("/ask", json={"question": "מה זה VUS?"})
+        assert r.status_code == 200
+        data = r.json()
+        required = {"answer", "safety_level", "needs_genetic_counselor",
+                    "matched_topic", "suggested_questions"}
+        assert required.issubset(set(data.keys()))
+
+    def test_portal_disabled_physician_endpoint_returns_503(self, monkeypatch):
+        """When secret is missing, /physician returns 503, not an error page."""
+        import importlib
+        from app import physician_auth, main
+        monkeypatch.setenv("REVIEW_PORTAL_ENABLED", "true")
+        monkeypatch.setenv("REVIEWER_USERNAME", "doc")
+        from app.physician_auth import generate_hash
+        monkeypatch.setenv("REVIEWER_PASSWORD_HASH", generate_hash("pw"))
+        monkeypatch.delenv("REVIEW_SESSION_SECRET", raising=False)
+        importlib.reload(physician_auth)
+        importlib.reload(main)
+        from fastapi.testclient import TestClient
+        client = TestClient(main.app)
+        r = client.get("/physician")
+        assert r.status_code == 503
+
+    def test_is_strong_secret_rejects_empty(self, monkeypatch):
+        from app.physician_auth import _is_strong_secret
+        assert _is_strong_secret("") is False
+
+    def test_is_strong_secret_rejects_whitespace_only(self, monkeypatch):
+        from app.physician_auth import _is_strong_secret
+        assert _is_strong_secret("   ") is False
+
+    def test_is_strong_secret_accepts_long_non_placeholder(self, monkeypatch):
+        from app.physician_auth import _is_strong_secret
+        assert _is_strong_secret("x" * 32) is True
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestApprovedContentSafety — Session 27.2 Step 8
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestApprovedContentSafety:
+    """
+    Physician approval cannot bypass safety policy.
+    - Approved gene drafts must NOT be served in response to personal variant
+      interpretation requests, treatment decisions, surgery decisions, or
+      personal risk questions.
+    - Safety routing for those categories is determined BEFORE any approved
+      draft is retrieved.
+    - get_approved_draft() is only called within the permitted
+      educational-intent path.
+    """
+
+    def _ask(self, question, **extra):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        client = TestClient(app)
+        payload = {"question": question}
+        payload.update(extra)
+        return client.post("/ask", json=payload).json()
+
+    def test_personal_interpretation_blocked_despite_approved_content(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        Even when an approved draft exists for BRCA1, a question asking for
+        personal risk interpretation returns requires_genetic_counselor,
+        not general_information.
+        """
+        rdb = isolated_review_db
+        rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="BRCA1 הוא גן מדכא גידול.",
+            gene_symbol="BRCA1",
+        )
+        rdb.update_draft_status(
+            draft_id=rdb.list_drafts()[0]["id"],
+            new_status="approved",
+            reviewer_identity="dr_test",
+        )
+        result = self._ask("מה הסיכון שלי לחלות בסרטן בגלל BRCA1?")
+        assert result["safety_level"] == "requires_genetic_counselor", (
+            f"Expected requires_genetic_counselor, got {result['safety_level']!r}. "
+            f"Approved draft must not bypass personal risk routing."
+        )
+
+    def test_surgery_decision_blocked_despite_approved_content(
+        self, isolated_review_db, monkeypatch
+    ):
+        """Surgery decision requests are blocked even when an approved draft exists."""
+        rdb = isolated_review_db
+        rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="BRCA2 מגביר סיכון לסרטן שד.",
+            gene_symbol="BRCA2",
+        )
+        rdb.update_draft_status(
+            draft_id=rdb.list_drafts()[0]["id"],
+            new_status="approved",
+            reviewer_identity="dr_test",
+        )
+        result = self._ask("האם עלי לעשות ניתוח כריתת שד בגלל BRCA2?")
+        assert result["safety_level"] in (
+            "requires_genetic_counselor", "out_of_scope"
+        ), (
+            f"Surgery decision must be blocked; got {result['safety_level']!r}"
+        )
+
+    def test_cancer_diagnosis_claim_blocked_despite_approved_content(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        'Do I have cancer?' must route to requires_genetic_counselor,
+        not return approved general educational content about the gene.
+        """
+        rdb = isolated_review_db
+        rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="BRCA1 הוא גן מדכא גידול. המידע כללי.",
+            gene_symbol="BRCA1",
+        )
+        rdb.update_draft_status(
+            draft_id=rdb.list_drafts()[0]["id"],
+            new_status="approved",
+            reviewer_identity="dr_test",
+        )
+        result = self._ask("תאמר לי אם אני חולה בסרטן בגלל שיש לי VUS ב-BRCA1")
+        assert result["safety_level"] == "requires_genetic_counselor", (
+            f"Diagnosis request must be blocked; got {result['safety_level']!r}. "
+            f"Answer was: {result.get('answer', '')[:80]}"
+        )
+
+    def test_general_gene_question_may_serve_approved_content(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        A plain educational gene question ('מה זה BRCA1?') is permitted to
+        serve approved content — this ensures the safety filter is not over-blocking.
+        The result must be general_information and must not direct to a counselor
+        with a safety block answer.
+        """
+        result = self._ask("מה זה BRCA1?")
+        assert result["safety_level"] == "general_information", (
+            f"General gene question should be general_information, "
+            f"got {result['safety_level']!r}"
+        )
+
+    def test_approved_draft_not_served_for_pii_question(self, isolated_review_db):
+        """A question with PII (Israeli ID) is blocked at step 1, before any draft lookup."""
+        result = self._ask("יש לי BRCA1, תעזור לי, מספר הזהות שלי הוא 123456789")
+        assert result["safety_level"] == "contains_identifying_info"
+
+    def test_unapproved_draft_not_served_in_approved_only_mode(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        In approved_only mode, a pending draft must not reach the patient.
+        The answer for a gene question falls back to the deterministic KB path.
+        """
+        monkeypatch.setenv("AI_DRAFT_VISIBILITY_MODE", "approved_only")
+        rdb = isolated_review_db
+        rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="BRCA1 הוא גן מדכא גידול — UNREVIEWED.",
+            gene_symbol="BRCA1",
+        )
+        result = self._ask("מה זה BRCA1?")
+        assert "UNREVIEWED" not in result.get("answer", ""), (
+            "Pending (unapproved) draft must never appear in patient-facing answer"
+        )

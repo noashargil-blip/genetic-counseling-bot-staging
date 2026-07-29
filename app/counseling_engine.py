@@ -93,7 +93,8 @@ _GENE_PATTERNS = [
 VUS_KNOWN_GENE_TEMPLATE_HE = (
     "כאשר מתקבל VUS בגן {gene}, המשמעות היא שזוהה שינוי גנטי, אך עדיין "
     "אין מספיק ראיות מדעיות כדי לקבוע אם הוא pathogenic או benign. "
-    "לכן אין להסיק מסקנות אישיות או לקבל החלטות רפואיות רק על סמך VUS."
+    "לכן אין להסיק מסקנות אישיות או לקבל החלטות רפואיות רק על סמך VUS. "
+    "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
 )
 
 
@@ -226,6 +227,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
     entry = kb.get_by_id("vus_known_gene")
     suggested = list(entry.get("suggested_questions", [])) if entry else list(_GENE_SUGGESTED_QUESTIONS)  # noqa: F821
 
+    parts.append(_GENE_SUMMARY_SAFETY_NOTE_HE)
     deterministic = "\n\n".join(parts)
     # Curated VUS+gene answers are always deterministic.
 
@@ -1210,6 +1212,8 @@ _FORBIDDEN_GENE_OUTPUT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_GENE_SUMMARY_SAFETY_NOTE_HE = "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
+
 _GENE_SUGGESTED_QUESTIONS = [
     "מה ההבדל בין VUS לבין ממצא pathogenic?",
     "האם VUS יכול להשתנות בעתיד?",
@@ -1438,6 +1442,11 @@ _EDUCATIONAL_PERSONAL_DECISION_BLOCK: tuple = (
     "מה הסיכוי שלי",
     "האם יהיה לי",
     "האם יהיו לי",
+    # Disease/diagnosis claims — also covers "אם אני חולה", "האם אני חולה"
+    "אני חולה",
+    "יש לי מחלה",
+    "יש לי סרטן",
+    "האם יש לי",
 )
 
 
@@ -3202,6 +3211,8 @@ def _build_gene_clinvar_deterministic_answer(gene: str, summary: dict) -> str:
         if len(clean_phenotypes) > 8:
             lines.append(f"(ועוד {len(clean_phenotypes) - 8} מצבים נוספים במאגר)")
 
+    lines.append("")
+    lines.append(_GENE_SUMMARY_SAFETY_NOTE_HE)
     return "\n".join(lines)
 
 
@@ -3422,7 +3433,8 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     tier2_fallback_answer = (
         _correction_prefix_t2 +
         f"עדיין אין לי סיכום ביולוגי זמין לגן {gene}. "
-        f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע."
+        f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע. "
+        f"לשאלות ספציפיות, פנה לצוות הגנטי שטיפל בך."
     )
     suggested = _gene_suggested_questions(question, gene)
     _draft_debug: dict = {}

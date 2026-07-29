@@ -108,6 +108,14 @@ CREATE TABLE IF NOT EXISTS review_audit (
 )
 """
 
+_CREATE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_drafts_status ON review_drafts (review_status)",
+    "CREATE INDEX IF NOT EXISTS idx_drafts_gene ON review_drafts (gene_symbol, normalized_intent)",
+    "CREATE INDEX IF NOT EXISTS idx_drafts_hash ON review_drafts (content_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_drafts_created ON review_drafts (created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_audit_draft_id ON review_audit (draft_id)",
+]
+
 # ---------------------------------------------------------------------------
 # Connection helpers
 # ---------------------------------------------------------------------------
@@ -170,6 +178,8 @@ def init_db() -> bool:
             cur = conn.cursor()
             cur.execute(_CREATE_DRAFTS)
             cur.execute(_CREATE_AUDIT)
+            for idx_sql in _CREATE_INDEXES:
+                cur.execute(idx_sql)
         _initialized = True
         logger.info("review_db: schema ready (%s)",
                     "postgres" if _USE_POSTGRES else str(_SQLITE_PATH))

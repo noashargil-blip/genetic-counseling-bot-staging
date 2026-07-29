@@ -22,5 +22,13 @@ openai==2.37.0
 # ── Tests ────────────────────────────────────────────────────────────────────
 pytest==9.0.3
 
+# ── Session middleware (cookie signing for physician portal) ─────────────────
+itsdangerous>=2.2.0
+
+# ── PostgreSQL driver (production review DB on Render / other PG hosts) ──────
+# psycopg2-binary is a self-contained wheel; use psycopg2 (compiled) for
+# production deployments where the build environment provides libpq.
+psycopg2-binary>=2.9.9
+
 # ── Optional: Anthropic (Claude) — see requirements-llm.txt ─────────────────
 # anthropic==0.102.0

@@ -25,7 +25,9 @@ import hmac
 import logging
 import os
 import secrets
-from typing import Optional
+import threading
+import time
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -87,21 +89,62 @@ def _get_reviewer_password_hash() -> Optional[str]:
     return os.environ.get("REVIEWER_PASSWORD_HASH", "").strip() or None
 
 
+_MIN_SECRET_BYTES = 32   # 256-bit minimum for HMAC signing key
+
+# Placeholder values that must never pass as a real secret
+_PLACEHOLDER_SECRETS: frozenset = frozenset({
+    "changeme", "secret", "your-secret", "your_secret",
+    "xxx", "placeholder", "replace-me", "replace_me",
+    "<random-hex-string>", "yoursecretkey",
+})
+
+
+def _is_strong_secret(raw: str) -> bool:
+    """Return True only when raw is a non-empty, non-placeholder secret of adequate length."""
+    stripped = raw.strip()
+    if not stripped:
+        return False
+    if len(stripped) < _MIN_SECRET_BYTES:
+        return False
+    if stripped.lower() in _PLACEHOLDER_SECRETS:
+        return False
+    return True
+
+
 def portal_enabled() -> bool:
-    """True only when all required env vars are set."""
+    """
+    True only when all required env vars are present AND the session secret
+    passes minimum-strength validation.  A missing, short, or placeholder
+    secret disables the portal while leaving the patient chat unaffected.
+    """
     enabled_flag = os.environ.get("REVIEW_PORTAL_ENABLED", "false").lower()
     if enabled_flag not in ("1", "true", "yes"):
         return False
     username = _get_reviewer_username()
     pw_hash = _get_reviewer_password_hash()
-    secret = get_session_secret()
-    return bool(username and pw_hash and secret)
+    raw_secret = os.environ.get("REVIEW_SESSION_SECRET", "")
+    if not _is_strong_secret(raw_secret):
+        logger.warning(
+            "physician_auth: portal disabled — REVIEW_SESSION_SECRET is missing, "
+            "too short (< %d chars), or a placeholder value.  "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\"",
+            _MIN_SECRET_BYTES,
+        )
+        return False
+    return bool(username and pw_hash)
 
 
 def get_session_secret() -> str:
     """Return REVIEW_SESSION_SECRET or a random fallback (dev only)."""
     secret = os.environ.get("REVIEW_SESSION_SECRET", "").strip()
     if secret:
+        if len(secret) < _MIN_SECRET_BYTES:
+            logger.warning(
+                "physician_auth: REVIEW_SESSION_SECRET is only %d chars — "
+                "use at least %d chars (generate with: "
+                "python -c \"import secrets; print(secrets.token_hex(32))\")",
+                len(secret), _MIN_SECRET_BYTES,
+            )
         return secret
     # Development fallback — logs a warning so operators notice
     logger.warning(
@@ -118,12 +161,61 @@ def get_session_secret() -> str:
 _SESSION_KEY = "physician_session"
 _MAX_SESSION_AGE_SECONDS = 8 * 3600   # 8 hours
 
+# ---------------------------------------------------------------------------
+# Brute-force protection
+# ---------------------------------------------------------------------------
+
+_MAX_FAILED_ATTEMPTS = 5          # attempts before lockout
+_ATTEMPT_WINDOW_SECONDS = 300     # 5-minute rolling window
+_LOCKOUT_SECONDS = 600            # 10-minute lockout after threshold
+
+_failed_attempts: dict = {}       # username → [timestamp, ...]
+_lockouts: dict = {}              # username → lockout_until_timestamp
+_bf_lock = threading.Lock()
+
+
+def _record_failed_login(username: str) -> None:
+    now = time.monotonic()
+    with _bf_lock:
+        timestamps: List[float] = _failed_attempts.get(username, [])
+        timestamps = [t for t in timestamps if now - t < _ATTEMPT_WINDOW_SECONDS]
+        timestamps.append(now)
+        _failed_attempts[username] = timestamps
+        if len(timestamps) >= _MAX_FAILED_ATTEMPTS:
+            _lockouts[username] = now + _LOCKOUT_SECONDS
+            logger.warning(
+                "physician_auth: login locked out for '%s' after %d failed attempts",
+                username, len(timestamps),
+            )
+
+
+def _clear_failed_login(username: str) -> None:
+    with _bf_lock:
+        _failed_attempts.pop(username, None)
+        _lockouts.pop(username, None)
+
+
+def is_locked_out(username: str) -> bool:
+    now = time.monotonic()
+    with _bf_lock:
+        until = _lockouts.get(username, 0)
+        if now < until:
+            return True
+        if until:
+            _lockouts.pop(username, None)
+        return False
+
 
 def authenticate(username: str, password: str) -> bool:
     """
     Check username + password against environment credentials.
     Constant-time on both checks to prevent timing side-channels.
+    Brute-force protection: locks out a username after 5 failed attempts in 5 minutes.
     """
+    if is_locked_out(username):
+        logger.warning("physician_auth: login attempt from locked-out username '%s'", username)
+        return False
+
     expected_username = _get_reviewer_username()
     stored_hash = _get_reviewer_password_hash()
 
@@ -136,7 +228,12 @@ def authenticate(username: str, password: str) -> bool:
     password_ok = verify_password(password, stored_hash)
 
     # Evaluate both before returning to avoid short-circuit timing leak
-    return username_ok and password_ok
+    success = username_ok and password_ok
+    if success:
+        _clear_failed_login(username)
+    else:
+        _record_failed_login(username)
+    return success
 
 
 def create_physician_session(request, identity: str) -> None:
