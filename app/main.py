@@ -20,6 +20,7 @@ Legacy ClinVar variant lookup (kept in code, not exposed in the current UI):
 import base64
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -56,6 +57,37 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Lifespan — runs once per process on startup and shutdown
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Initialize persistent resources once on startup."""
+    # Review DB schema — idempotent, safe to call every restart.
+    # Catches all exceptions so a DB failure never prevents the patient chat
+    # from starting.  No DATABASE_URL or credentials are written to the log.
+    try:
+        ok = _review_db.init_db()
+        if ok:
+            logger.info("review_db: startup initialization succeeded")
+        else:
+            logger.warning(
+                "review_db: startup initialization returned False — "
+                "review persistence unavailable; patient chat unaffected"
+            )
+    except Exception as exc:
+        # Log the exception *type* only — not the message (which may contain
+        # the DATABASE_URL or credentials supplied by the environment).
+        logger.error(
+            "review_db: startup initialization raised %s — "
+            "review persistence unavailable; patient chat unaffected",
+            type(exc).__name__,
+        )
+    yield
+    # Nothing to clean up on shutdown.
+
+
+# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 app = FastAPI(
@@ -67,6 +99,7 @@ app = FastAPI(
         "and does not replace a genetic counselor."
     ),
     version=_health_module.APP_VERSION,
+    lifespan=_lifespan,
 )
 
 app.add_middleware(

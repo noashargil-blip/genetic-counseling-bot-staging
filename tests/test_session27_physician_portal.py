@@ -1188,3 +1188,206 @@ class TestApprovedContentSafety:
         assert "UNREVIEWED" not in result.get("answer", ""), (
             "Pending (unapproved) draft must never appear in patient-facing answer"
         )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestStartupDbInit — Session 27.3
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestStartupDbInit:
+    """
+    Session 27.3 — review_db is initialized via FastAPI lifespan on startup.
+
+    Requirements verified:
+    - init_db() is called once per process startup (not on each request)
+    - init_db() is idempotent (safe to call twice)
+    - An exception in init_db() does not prevent the app from starting
+    - Patient /ask continues to work after an init failure
+    - No DATABASE_URL or credentials appear in exception log messages
+    - Portal endpoints are available after a successful startup init
+    """
+
+    def _reload_fresh(self, monkeypatch, tmp_path, db_name="startup_test.db",
+                      database_url=None):
+        """
+        Reload review_db and main with a fresh isolated SQLite path.
+        Returns (review_db_module, main_module).
+        """
+        import importlib
+        from app import review_db, main
+        db_path = str(tmp_path / db_name)
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        if database_url is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", database_url)
+        importlib.reload(review_db)
+        importlib.reload(main)
+        return review_db, main
+
+    def test_db_init_called_on_startup(self, tmp_path, monkeypatch):
+        """init_db() is called exactly once during the lifespan startup event."""
+        import importlib
+        from app import review_db, main
+        db_path = str(tmp_path / "startup_test.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+
+        # Install counter AFTER reload so autouse fixture calls don't pollute count
+        call_count = [0]
+        _orig = review_db.init_db
+        def _counting():
+            call_count[0] += 1
+            return _orig()
+        monkeypatch.setattr(review_db, "init_db", _counting)
+        importlib.reload(main)
+
+        assert call_count[0] == 0  # lifespan not yet fired
+
+        from fastapi.testclient import TestClient
+        with TestClient(main.app) as client:
+            r = client.get("/health")
+            assert r.status_code == 200
+            # Lifespan startup fired init_db exactly once
+            assert call_count[0] == 1
+
+    def test_db_init_called_exactly_once_per_startup(self, tmp_path, monkeypatch):
+        """init_db is called exactly once per startup, not on every HTTP request."""
+        import importlib
+        from app import review_db, main
+        db_path = str(tmp_path / "once_test.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+
+        call_count = [0]
+        _orig = review_db.init_db
+
+        def _counting_init():
+            call_count[0] += 1
+            return _orig()
+
+        monkeypatch.setattr(review_db, "init_db", _counting_init)
+        importlib.reload(main)
+
+        from fastapi.testclient import TestClient
+        with TestClient(main.app) as client:
+            client.get("/health")
+            client.get("/health")
+            client.post("/ask", json={"question": "מה זה VUS?"})
+
+        assert call_count[0] == 1, (
+            f"init_db called {call_count[0]} time(s); expected exactly 1"
+        )
+
+    def test_db_init_idempotent_second_call(self, isolated_review_db):
+        """Calling init_db() again after initial setup is safe and preserves data."""
+        rdb = isolated_review_db
+        rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן BRCA1 מקודד לחלבון תיקון DNA.",
+            gene_symbol="BRCA1",
+        )
+        result = rdb.init_db()
+        assert result is True
+        drafts = rdb.list_drafts()
+        assert len(drafts) == 1, "Existing draft must survive second init_db() call"
+
+    def test_startup_survives_init_exception(self, tmp_path, monkeypatch):
+        """When init_db raises, startup completes and /health is still reachable."""
+        import importlib
+        from app import review_db, main
+        db_path = str(tmp_path / "exc_test.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+
+        def _raise_init():
+            raise RuntimeError("simulated DB init failure")
+
+        monkeypatch.setattr(review_db, "init_db", _raise_init)
+        importlib.reload(main)
+
+        from fastapi.testclient import TestClient
+        with TestClient(main.app, raise_server_exceptions=False) as client:
+            r = client.get("/health")
+            assert r.status_code == 200, (
+                "App must remain reachable after init_db exception"
+            )
+
+    def test_patient_ask_works_after_init_failure(self, tmp_path, monkeypatch):
+        """POST /ask returns a valid 5-key response even when DB init fails."""
+        import importlib
+        from app import review_db, main
+        db_path = str(tmp_path / "ask_test.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+        monkeypatch.setattr(review_db, "init_db", lambda: (_ for _ in ()).throw(
+            RuntimeError("db unreachable")))
+        importlib.reload(main)
+
+        from fastapi.testclient import TestClient
+        with TestClient(main.app, raise_server_exceptions=False) as client:
+            r = client.post("/ask", json={"question": "מה זה VUS?"})
+            assert r.status_code == 200
+            data = r.json()
+            required = {"answer", "safety_level", "needs_genetic_counselor",
+                        "matched_topic", "suggested_questions"}
+            assert required.issubset(set(data.keys()))
+
+    def test_no_credentials_in_init_exception_log(self, tmp_path, monkeypatch, caplog):
+        """
+        When init_db raises an exception whose message contains DATABASE_URL
+        or credentials, the log must only record the exception *type*, not
+        the exception message.
+        """
+        import logging, importlib
+        fake_url = "postgresql://dr_admin:super_secret_pw@db.render.com:5432/review_prod"
+        db_path = str(tmp_path / "cred_test.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.setenv("DATABASE_URL", fake_url)
+        from app import review_db, main
+        importlib.reload(review_db)
+
+        def _raise_with_url():
+            raise Exception(f"FATAL: connection refused to {fake_url}")
+
+        monkeypatch.setattr(review_db, "init_db", _raise_with_url)
+        importlib.reload(main)
+
+        from fastapi.testclient import TestClient
+        with caplog.at_level(logging.DEBUG):
+            with TestClient(main.app, raise_server_exceptions=False) as client:
+                client.get("/health")
+
+        all_log = " ".join(r.getMessage() for r in caplog.records)
+        assert "super_secret_pw" not in all_log, (
+            "Password must not appear in any log record"
+        )
+        assert fake_url not in all_log, (
+            "Full DATABASE_URL must not appear in any log record"
+        )
+
+    def test_portal_available_after_successful_startup_init(self, tmp_path, monkeypatch):
+        """When portal is configured and init succeeds, /physician returns 200."""
+        import secrets, importlib
+        from app.physician_auth import generate_hash
+        from app import physician_auth, review_db, main
+        db_path = str(tmp_path / "portal_startup.db")
+        monkeypatch.setenv("REVIEW_PORTAL_ENABLED", "true")
+        monkeypatch.setenv("REVIEWER_USERNAME", "dr_startup")
+        monkeypatch.setenv("REVIEWER_PASSWORD_HASH", generate_hash("pw123"))
+        monkeypatch.setenv("REVIEW_SESSION_SECRET", secrets.token_hex(32))
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(physician_auth)
+        importlib.reload(review_db)
+        importlib.reload(main)
+
+        from fastapi.testclient import TestClient
+        with TestClient(main.app) as client:
+            r = client.get("/physician")
+            assert r.status_code == 200
+            assert review_db._initialized is True
