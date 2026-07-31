@@ -3476,41 +3476,45 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
 
     # Answer selection:
     # - approved_only: use approved text if it exists, otherwise fallback (no pending draft).
-    # - immediate (default): a pending AI draft is NOT promoted into the main bubble;
-    #   the patient sees a short bridge message, and the draft is shown in a separate
-    #   collapsed card labelled "טיוטת AI לא מבוקרת".
+    # Answer selection — main_answer and draft generation are fully independent:
+    #
+    # approved_only: if a physician has approved a draft, serve that text.
+    #   Otherwise show the fallback and suppress the unverified draft entirely.
+    # immediate (default): always serve the deterministic fallback.
+    #   A pending AI draft is NEVER used as the main answer; it goes only into
+    #   the supplemental card.  This means answer is identical whether or not
+    #   draft generation succeeded — the two pipelines cannot interfere.
     if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
         if _approved_db_draft:
             main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
         else:
             main_answer = tier2_fallback_answer
             draft_available = False
-    elif draft_available and unverified_draft:
-        # Main patient answer: references existing ClinVar data (always present
-        # for Tier-2) without claiming "no info" — the AI draft provides
-        # supplemental biology text in the collapsed card.
-        # The draft text itself is NEVER placed here (no duplication, no
-        # unreviewed content in the main bubble).
-        main_answer = (
-            _correction_prefix_t2
-            + f"לגן {gene} ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע. "
-            + "מידע כללי נוסף על הגן זמין בטיוטת ה-AI הלא מבוקרת המצורפת. "
-            + "לשאלות ספציפיות, פנה לצוות הגנטי שטיפל בך."
-        )
     else:
+        # immediate mode: always the deterministic fallback
         main_answer = tier2_fallback_answer
 
-    # Duplication control: only show the draft card when it adds content that
-    # isn't already present in the main answer.  For normal Tier-2 answers the
-    # overlap is negligible so draft_displayable will almost always be True.
+    # draft_promoted_to_answer: True only when an approved draft text was used
+    # as the main answer (approved_only mode + approved draft present).
+    _draft_promoted = _AI_DRAFT_VISIBILITY_MODE == "approved_only" and bool(_approved_db_draft)
+
+    # Duplication control — show the supplemental card only when it adds content
+    # not already in the main answer, and only in immediate mode (in approved_only
+    # mode pending drafts are never shown to the patient).
     _draft_text_he = (unverified_draft or {}).get("text_he", "")
-    draft_displayable = (
-        draft_available
-        and _draft_adds_meaningful_information(_draft_text_he, main_answer)
-    )
-    _draft_hidden_reason: "Optional[str]" = (
-        None if draft_displayable else ("no_draft" if not draft_available else "identical_to_main_answer")
-    )
+    if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+        draft_displayable = False
+        _draft_hidden_reason: "Optional[str]" = "approved_only_mode" if draft_available else "no_draft"
+    else:
+        draft_displayable = (
+            draft_available
+            and _draft_adds_meaningful_information(_draft_text_he, main_answer)
+        )
+        _draft_hidden_reason = (
+            None if draft_displayable
+            else "no_draft" if not draft_available
+            else "identical_to_main_answer"
+        )
 
     result: dict = {
         "answer": main_answer,
@@ -3534,9 +3538,10 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             # True only when the draft adds content not already in the main answer.
             "unverified_gene_draft_displayable": draft_displayable,
             "draft_hidden_reason": _draft_hidden_reason,
-            # Pending drafts are never promoted into the main answer bubble.
-            # The draft is shown separately in a collapsed patient card.
-            "draft_promoted_to_answer": False,
+            # True only when an approved draft text is the main answer
+            # (approved_only mode + approved draft present).
+            # Always False for pending/unreviewed drafts in immediate mode.
+            "draft_promoted_to_answer": _draft_promoted,
             "ai_draft_attempted": _draft_debug.get("attempted", False),
             "ai_draft_generated": draft_available,
             "significance_breakdown": summary.get("by_significance") or {},

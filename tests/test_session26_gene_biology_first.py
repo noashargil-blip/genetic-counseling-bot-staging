@@ -126,10 +126,13 @@ class TestTier2PromptInput:
         )
 
 
-# ── B. Biology in main answer ──────────────────────────────────────────────────
+# ── B. Biology text lands in supplemental draft, not main answer ───────────────
+# Session 27.6.1 design: main answer = deterministic fallback (always).
+# AI biology text = supplemental unverified_gene_draft for the collapsed card.
 
 class TestGeneBiologyAnswer:
-    """Explicit gene questions return the mocked biological AI text as the main answer."""
+    """Explicit gene questions return the deterministic fallback as the main
+    answer; mocked biology text lands in unverified_gene_draft (supplemental)."""
 
     @pytest.mark.parametrize("gene,bio_text", [
         ("APOE", "APOE הוא גן שמקודד לחלבון המעורב בהובלה ובפירוק של שומנים בגוף ובמוח."),
@@ -138,16 +141,25 @@ class TestGeneBiologyAnswer:
         ("MTHFR", "MTHFR הוא גן שמקודד לאנזים המעורב במסלול הפולאט ובמטבוליזם של הומוציסטאין."),
         ("FOXP2", "FOXP2 הוא גן שמקודד לפקטור שעתוק המעורב בהתפתחות מערכת העצבים."),
     ])
-    def test_gene_answer_contains_biology_text(self, monkeypatch, gene, bio_text):
+    def test_gene_answer_biology_in_draft_not_main(self, monkeypatch, gene, bio_text):
+        """Session 27.6.1: biology text goes to unverified_gene_draft, not main answer."""
         _mock_tier2_env(monkeypatch, gene, bio_text)
         data = client.post("/ask", json={"question": f"מה זה הגן {gene}?"}).json()
         answer = data.get("answer", "")
+        # Gene name must appear in the fallback main answer
         assert gene in answer, f"{gene} must appear in answer. Answer: {answer[:200]!r}"
         assert len(answer) > 30, f"Answer too short for {gene}: {answer!r}"
-        # The mocked biology text should be the answer content
-        assert bio_text[:40] in answer, (
-            f"Biology text not in answer for {gene}.\nExpected prefix: {bio_text[:40]!r}\n"
+        # Biology text must NOT be the main answer (that would violate independence)
+        assert bio_text[:40] not in answer, (
+            f"Biology text must not appear in main answer for {gene} (draft must be supplemental).\n"
             f"Answer: {answer[:300]!r}"
+        )
+        # Biology text MUST be in the supplemental draft for the collapsed card
+        draft = data.get("unverified_gene_draft") or {}
+        assert bio_text[:40] in (draft.get("text_he") or ""), (
+            f"Biology text must be in unverified_gene_draft.text_he for {gene}.\n"
+            f"Expected prefix: {bio_text[:40]!r}\n"
+            f"Draft text_he: {(draft.get('text_he') or '')[:300]!r}"
         )
 
     @pytest.mark.parametrize("gene", _BIOLOGY_GENES)
@@ -188,19 +200,23 @@ class TestGeneBiologyAnswer:
             )
 
 
-# ── C. No duplicate display ────────────────────────────────────────────────────
+# ── C. Supplemental card display ──────────────────────────────────────────────
+# Session 27.6.1: the draft is never promoted to the main answer.
+# draft_promoted_to_answer=False always for immediate mode.
+# The card IS shown (displayable=True) because fallback ≠ draft biology text.
 
 class TestNoDuplicateDisplay:
-    """When AI draft is promoted to main answer, the draft card must be suppressed."""
+    """Verify draft metadata and supplemental card display in immediate mode."""
 
-    def test_draft_promoted_flag_set(self, monkeypatch):
-        """gene_metadata.draft_promoted_to_answer must be True when draft is the main answer."""
+    def test_draft_not_promoted_to_main_answer(self, monkeypatch):
+        """Session 27.6.1: draft_promoted_to_answer is False — fallback is the
+        main answer, draft is supplemental only."""
         bio_text = "APOE הוא גן שמקודד לחלבון המעורב בהובלה של שומנים."
         _mock_tier2_env(monkeypatch, "APOE", bio_text)
         data = client.post("/ask", json={"question": "מה זה הגן APOE?"}).json()
         meta = data.get("gene_metadata", {})
-        assert meta.get("draft_promoted_to_answer") is True, (
-            f"draft_promoted_to_answer must be True when draft is main answer. meta={meta}"
+        assert meta.get("draft_promoted_to_answer") is False, (
+            f"draft_promoted_to_answer must be False: draft is supplemental. meta={meta}"
         )
 
     def test_unverified_gene_draft_still_in_response(self, monkeypatch):
@@ -212,16 +228,19 @@ class TestNoDuplicateDisplay:
             "unverified_gene_draft must still be present in response for API compatibility"
         )
 
-    def test_draft_promoted_suppresses_frontend_card(self, monkeypatch):
-        """draft_promoted_to_answer=True must prevent the frontend from rendering the card."""
+    def test_draft_card_displayable_when_supplemental(self, monkeypatch):
+        """Session 27.6.1: draft card IS displayable when draft is supplemental.
+        fallback ≠ draft biology text → low word overlap → displayable=True."""
         bio_text = "MTHFR הוא גן שמקודד לאנזים המעורב במסלול הפולאט."
         _mock_tier2_env(monkeypatch, "MTHFR", bio_text)
         data = client.post("/ask", json={"question": "מה זה הגן MTHFR?"}).json()
         meta = data.get("gene_metadata", {})
-        # The frontend checks: !meta.draft_promoted_to_answer — if True, no card rendered.
-        # Here we verify the flag is present and True so frontend can act on it.
-        assert meta.get("draft_promoted_to_answer") is True
+        assert meta.get("draft_promoted_to_answer") is False
         assert meta.get("answer_tier") == "tier2"
+        # Card must be shown — draft provides unique supplemental content
+        assert meta.get("unverified_gene_draft_displayable") is True, (
+            f"Draft card must be displayable when it is supplemental. meta={meta}"
+        )
 
     def test_no_draft_flag_when_no_draft(self, monkeypatch):
         """When OpenAI is unavailable (no draft), draft_promoted_to_answer must be False."""

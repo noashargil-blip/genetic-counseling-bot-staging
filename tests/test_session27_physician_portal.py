@@ -2140,12 +2140,13 @@ class TestSession275PatientDraftCard:
             "when the draft is pending/unreviewed"
         )
 
-    def test_main_answer_is_bridge_message_not_empty(
+    def test_main_answer_is_fallback_not_bridge_or_draft(
         self, isolated_review_db, monkeypatch
     ):
         """
-        When a pending draft exists, the main answer must be a short bridge
-        message that neither falsely says 'no info' nor contains the full draft.
+        Session 27.6.1: when a pending draft exists, the main answer must be
+        the deterministic tier-2 fallback — not a bridge message, not the draft
+        text.  The draft goes only into the supplemental card.
         """
         data = self._ask_with_draft(
             "מה זה גן CCR5?", monkeypatch, isolated_review_db,
@@ -2153,9 +2154,18 @@ class TestSession275PatientDraftCard:
         )
         answer = data.get("answer", "")
         assert answer.strip(), "Main answer must not be empty"
-        # Bridge message must mention the draft is available
-        assert any(kw in answer for kw in ["טיוטת", "מידע נוסף", "מצורפת"]), (
-            f"Bridge message must mention the draft; got: {answer!r}"
+        # Must mention the gene name (it's part of the fallback)
+        assert "CCR5" in answer, f"Fallback must mention the gene; got: {answer!r}"
+        # Must not be the draft text
+        assert "מקודד לקולטן" not in answer, (
+            f"Draft biology text must not appear in main answer; got: {answer!r}"
+        )
+        # Must not be the Session 27.5/27.6 bridge variants
+        assert "ניתן לפתוח את טיוטת" not in answer, (
+            f"Bridge phrase must not appear in main answer; got: {answer!r}"
+        )
+        assert "נמצא מידע נוסף" not in answer, (
+            f"Bridge phrase must not appear in main answer; got: {answer!r}"
         )
 
     def test_draft_not_in_main_answer_implies_not_promoted(
@@ -2322,20 +2332,31 @@ class TestSession276DraftCardInteraction:
             "Draft biology text must not appear in the main answer bubble"
         )
 
-    def test_main_answer_does_not_say_no_info_when_draft_available(
+    def test_main_answer_is_fallback_when_draft_available(
         self, isolated_review_db, monkeypatch
     ):
         """
-        When a draft exists the main answer must not claim 'no info available'.
-        (The tier2_fallback_answer phrase 'אין לי סיכום' must be absent.)
+        Session 27.6.1: when a draft is available, the main answer is still the
+        deterministic tier-2 fallback — not a bridge and not the draft text.
+        The fallback is allowed to say 'no approved summary' even when a
+        supplemental draft exists; the two pipelines are fully independent.
         """
         data = self._ask_with_fake_draft(
             "מה זה גן CCR5?", monkeypatch, "CCR5",
             "CCR5 מקודד לקולטן."
         )
         answer = data.get("answer", "")
-        assert "אין לי סיכום" not in answer, (
-            f"Main answer must not claim 'no info' when a draft exists; got: {answer!r}"
+        # Main answer must be non-empty and mention the gene
+        assert answer.strip() and "CCR5" in answer, (
+            f"Fallback main answer must be non-empty and mention gene; got: {answer!r}"
+        )
+        # No bridge phrase inserted (independence guarantee)
+        assert "ניתן לפתוח את טיוטת" not in answer, (
+            f"Bridge phrase must not appear in main answer; got: {answer!r}"
+        )
+        # Draft text must not be the main answer
+        assert "מקודד לקולטן" not in answer, (
+            f"Draft biology text must not appear in main answer; got: {answer!r}"
         )
 
     # ------------------------------------------------------------------
@@ -2399,4 +2420,198 @@ class TestSession276DraftCardInteraction:
         meta = data.get("gene_metadata") or {}
         assert meta.get("draft_promoted_to_answer") is False, (
             f"draft_promoted_to_answer must remain False; meta={meta}"
+        )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestSession2761DraftAnswerIndependence — Session 27.6.1
+#
+# Core rule: main answer is invariant to AI draft generation.
+# answer field must be IDENTICAL whether or not a draft is produced.
+# No bridge phrase, no draft text, no ClinVar-reference bridge inserted.
+# Physician portal functionality unchanged.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestSession2761DraftAnswerIndependence:
+    """
+    Session 27.6.1 — main answer must be fully independent of AI draft generation.
+
+    For Tier-2 genes the main answer is always the deterministic fallback,
+    regardless of whether a draft was generated, is pending, is approved,
+    or is a duplicate of the main answer.
+    """
+
+    # Genes known to go through the Tier-2 path in the real ClinVar index.
+    # Each test patches _generate_unverified_gene_draft so no real LLM is needed.
+    _GENE = "CCR5"
+    _QUESTION = f"מה זה הגן {_GENE}?"
+
+    # Marker phrase embedded in fake draft text — must never appear in main answer.
+    _DRAFT_MARKER = "MARKER_SESSION2761_אבג_ABC"
+
+    def _ask(self, monkeypatch, gene, draft_text_or_none):
+        """
+        POST /ask with _generate_unverified_gene_draft patched.
+        Pass draft_text_or_none=None to simulate no LLM (draft generation fails).
+        """
+        import importlib
+        from app import counseling_engine
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        def _fake_draft(g, question="", clinvar_context=None,
+                        use_lenient_validator=False, _debug=None):
+            if draft_text_or_none is None:
+                return None
+            return {
+                "visible": True, "status": "unreviewed",
+                "gene_symbol": g, "warning_he": "AI",
+                "text_he": draft_text_or_none,
+                "generated_by_model": "test", "review_status": "unreviewed",
+                "approved": False, "generated_at": "2026-01-01T00:00:00Z",
+            }
+
+        monkeypatch.setattr(counseling_engine, "_generate_unverified_gene_draft", _fake_draft)
+        client = TestClient(app)
+        r = client.post("/ask", json={"question": f"מה זה הגן {gene}?"})
+        assert r.status_code == 200, f"POST /ask failed: {r.text}"
+        return r.json()
+
+    # ------------------------------------------------------------------
+    # Invariance: answer identical with and without draft
+    # ------------------------------------------------------------------
+
+    def test_answer_invariant_to_draft_generation(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        answer field must be identical whether draft generation succeeds or fails.
+        This is the core Session 27.6.1 independence guarantee.
+        """
+        data_with = self._ask(monkeypatch, self._GENE, f"{self._GENE} ביולוגיה כללית.")
+        data_without = self._ask(monkeypatch, self._GENE, None)
+
+        answer_with = data_with.get("answer", "")
+        answer_without = data_without.get("answer", "")
+
+        assert answer_with == answer_without, (
+            "answer must be IDENTICAL regardless of draft generation.\n"
+            f"With draft:    {answer_with!r}\n"
+            f"Without draft: {answer_without!r}"
+        )
+
+    def test_suggested_questions_invariant_to_draft_generation(
+        self, isolated_review_db, monkeypatch
+    ):
+        """suggested_questions must not change based on whether a draft was generated."""
+        data_with = self._ask(monkeypatch, self._GENE, f"{self._GENE} ביולוגיה.")
+        data_without = self._ask(monkeypatch, self._GENE, None)
+        assert data_with.get("suggested_questions") == data_without.get("suggested_questions"), (
+            "suggested_questions must be identical with/without draft"
+        )
+
+    def test_safety_level_invariant_to_draft_generation(
+        self, isolated_review_db, monkeypatch
+    ):
+        """safety_level must not change based on whether a draft was generated."""
+        data_with = self._ask(monkeypatch, self._GENE, f"{self._GENE} ביולוגיה.")
+        data_without = self._ask(monkeypatch, self._GENE, None)
+        assert data_with.get("safety_level") == data_without.get("safety_level"), (
+            "safety_level must be identical with/without draft"
+        )
+
+    # ------------------------------------------------------------------
+    # No bridge or draft text in main answer
+    # ------------------------------------------------------------------
+
+    def test_no_bridge_phrase_in_answer(self, isolated_review_db, monkeypatch):
+        """No Session 27.5/27.6 bridge phrases must appear in the main answer."""
+        data = self._ask(monkeypatch, self._GENE, f"{self._GENE} biology text.")
+        answer = data.get("answer", "")
+        for phrase in [
+            "ניתן לפתוח את טיוטת",
+            "נמצא מידע נוסף",
+            "מידע כללי נוסף על הגן זמין",
+            "ניתן לפתוח את טיוטת ה-AI",
+        ]:
+            assert phrase not in answer, (
+                f"Bridge phrase {phrase!r} must not appear in main answer.\n"
+                f"Answer: {answer[:300]!r}"
+            )
+
+    def test_draft_marker_not_in_main_answer(self, isolated_review_db, monkeypatch):
+        """Draft text with a unique marker must never appear in the main answer."""
+        draft_text = f"{self._GENE} הוא גן. {self._DRAFT_MARKER}"
+        data = self._ask(monkeypatch, self._GENE, draft_text)
+        assert self._DRAFT_MARKER not in data.get("answer", ""), (
+            "Draft marker text must not appear in main answer"
+        )
+
+    @pytest.mark.parametrize("gene", ["CCR5", "TNF", "APOE", "TYR"])
+    def test_no_bridge_phrase_multiple_genes(
+        self, isolated_review_db, monkeypatch, gene
+    ):
+        """Bridge phrase must be absent for multiple Tier-2 genes."""
+        data = self._ask(monkeypatch, gene, f"{gene} biology text for testing.")
+        answer = data.get("answer", "")
+        assert "ניתן לפתוח את טיוטת" not in answer, (
+            f"Bridge phrase in answer for {gene}: {answer[:200]!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Supplemental card metadata
+    # ------------------------------------------------------------------
+
+    def test_draft_displayable_true_when_draft_available_immediate(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        In immediate mode with a draft, unverified_gene_draft_displayable must
+        be True because the fallback ≠ draft biology text.
+        """
+        data = self._ask(monkeypatch, self._GENE, f"{self._GENE} ביולוגיה.")
+        meta = data.get("gene_metadata") or {}
+        assert meta.get("unverified_gene_draft_displayable") is True, (
+            f"Draft card must be displayable when draft is supplemental; meta={meta}"
+        )
+
+    def test_draft_displayable_false_when_no_draft(
+        self, isolated_review_db, monkeypatch
+    ):
+        """When no draft is generated, unverified_gene_draft_displayable must be False."""
+        data = self._ask(monkeypatch, self._GENE, None)
+        meta = data.get("gene_metadata") or {}
+        assert meta.get("unverified_gene_draft_displayable") is False, (
+            f"Draft card must be hidden when no draft generated; meta={meta}"
+        )
+
+    def test_draft_promoted_to_answer_always_false_immediate(
+        self, isolated_review_db, monkeypatch
+    ):
+        """draft_promoted_to_answer must always be False in immediate mode."""
+        for draft in [f"{self._GENE} ביולוגיה.", None]:
+            data = self._ask(monkeypatch, self._GENE, draft)
+            meta = data.get("gene_metadata") or {}
+            assert meta.get("draft_promoted_to_answer") is False, (
+                f"draft_promoted_to_answer must be False for immediate mode; "
+                f"draft={'set' if draft else 'None'}; meta={meta}"
+            )
+
+    def test_unverified_gene_draft_present_when_draft_generated(
+        self, isolated_review_db, monkeypatch
+    ):
+        """unverified_gene_draft must be in the response so the card can render."""
+        data = self._ask(monkeypatch, self._GENE, f"{self._GENE} ביולוגיה.")
+        assert "unverified_gene_draft" in data, (
+            "unverified_gene_draft must be present in response when a draft was generated"
+        )
+        assert data["unverified_gene_draft"] is not None
+
+    def test_unverified_gene_draft_absent_when_no_draft(
+        self, isolated_review_db, monkeypatch
+    ):
+        """unverified_gene_draft must be absent when draft generation failed."""
+        data = self._ask(monkeypatch, self._GENE, None)
+        assert data.get("unverified_gene_draft") is None, (
+            "unverified_gene_draft must be absent when no draft was generated"
         )
