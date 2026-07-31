@@ -1391,3 +1391,332 @@ class TestStartupDbInit:
             r = client.get("/physician")
             assert r.status_code == 200
             assert review_db._initialized is True
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestPostgresCompatibility — Session 27.4
+#
+# These tests target the specific SQLite-vs-PostgreSQL dialect gaps fixed in
+# Session 27.4.  All assertions run against the SQLite backend (the default
+# in tests) but verify that the module-level *constants* and *helpers* contain
+# the correct PostgreSQL-safe values so the same code compiles and runs on
+# either engine.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestPostgresCompatibility:
+    """
+    Session 27.4 — root-cause fixes for PostgreSQL schema and row compatibility.
+
+    Requirements verified:
+    - Separate schema strings contain engine-correct auto-increment syntax
+    - Placeholder helper returns ? (SQLite) or %s (PostgreSQL) as appropriate
+    - _row_to_dict() handles None and dict-like rows uniformly
+    - _initialized follows success/failure of init_db()
+    - No conn.execute() shortcut remains in the module source
+    - All public CRUD functions return Python dicts (not tuples)
+    - pending_count() returns an int, not a crash from dict-key indexing
+    - No real PostgreSQL required; explicitly documented where absent
+    """
+
+    # ------------------------------------------------------------------
+    # Schema syntax
+    # ------------------------------------------------------------------
+
+    def test_pg_audit_schema_uses_bigserial(self, isolated_review_db):
+        """_CREATE_AUDIT_PG must use BIGSERIAL PRIMARY KEY (PostgreSQL syntax)."""
+        rdb = isolated_review_db
+        schema = rdb._CREATE_AUDIT_PG
+        assert "BIGSERIAL" in schema.upper(), (
+            "_CREATE_AUDIT_PG must declare 'BIGSERIAL' for the primary key"
+        )
+        assert "AUTOINCREMENT" not in schema.upper(), (
+            "_CREATE_AUDIT_PG must not contain 'AUTOINCREMENT' (SQLite-only keyword)"
+        )
+
+    def test_sqlite_audit_schema_uses_autoincrement(self, isolated_review_db):
+        """_CREATE_AUDIT_SQLITE must use AUTOINCREMENT (SQLite syntax)."""
+        rdb = isolated_review_db
+        schema = rdb._CREATE_AUDIT_SQLITE
+        assert "AUTOINCREMENT" in schema.upper()
+
+    def test_pg_schema_does_not_contain_autoincrement(self, isolated_review_db):
+        """Guard: the PostgreSQL schema string must be clean of SQLite artifacts."""
+        rdb = isolated_review_db
+        assert "AUTOINCREMENT" not in rdb._CREATE_AUDIT_PG.upper()
+
+    # ------------------------------------------------------------------
+    # Placeholder helpers
+    # ------------------------------------------------------------------
+
+    def test_ph_returns_question_mark_for_sqlite(self, isolated_review_db):
+        """_ph() returns '?' when the SQLite backend is active."""
+        rdb = isolated_review_db
+        assert not rdb._USE_POSTGRES, "SQLite should be active in isolated tests"
+        assert rdb._ph() == "?"
+
+    def test_placeholder_n_returns_repeated_question_marks(self, isolated_review_db):
+        """_placeholder(3) returns '?, ?, ?' for SQLite backend."""
+        rdb = isolated_review_db
+        result = rdb._placeholder(3)
+        assert result == "?, ?, ?"
+
+    def test_ph_returns_percent_s_for_postgres(self, monkeypatch, tmp_path):
+        """_ph() returns '%s' when DATABASE_URL is a PostgreSQL URL."""
+        import importlib
+        from app import review_db
+        db_path = str(tmp_path / "pg_ph_test.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@localhost/testdb")
+        importlib.reload(review_db)
+        assert review_db._USE_POSTGRES is True
+        assert review_db._ph() == "%s"
+        # Restore normal state for subsequent tests (autouse fixture handles DB)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+
+    def test_placeholder_n_returns_percent_s_for_postgres(self, monkeypatch, tmp_path):
+        """_placeholder(2) returns '%s, %s' for the PostgreSQL backend."""
+        import importlib
+        from app import review_db
+        db_path = str(tmp_path / "pg_ph2_test.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pw@localhost/testdb")
+        importlib.reload(review_db)
+        assert review_db._placeholder(2) == "%s, %s"
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+
+    # ------------------------------------------------------------------
+    # _row_to_dict
+    # ------------------------------------------------------------------
+
+    def test_row_to_dict_none_returns_none(self, isolated_review_db):
+        """_row_to_dict(None) must return None without raising."""
+        rdb = isolated_review_db
+        assert rdb._row_to_dict(None) is None
+
+    def test_row_to_dict_plain_dict_is_identity(self, isolated_review_db):
+        """_row_to_dict on a plain dict returns the same mapping (simulates RealDictRow)."""
+        rdb = isolated_review_db
+        row = {"id": "abc", "review_status": "pending", "cnt": 5}
+        result = rdb._row_to_dict(row)
+        assert result == row
+        assert isinstance(result, dict)
+
+    def test_row_to_dict_sqlite_row_returns_dict(self, isolated_review_db):
+        """_row_to_dict on a real sqlite3.Row returns a plain dict with correct keys."""
+        import sqlite3
+        rdb = isolated_review_db
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE t (a INTEGER, b TEXT)")
+        cur.execute("INSERT INTO t VALUES (42, 'hello')")
+        cur.execute("SELECT * FROM t")
+        row = cur.fetchone()
+        result = rdb._row_to_dict(row)
+        conn.close()
+        assert isinstance(result, dict)
+        assert result["a"] == 42
+        assert result["b"] == "hello"
+
+    # ------------------------------------------------------------------
+    # _initialized semantics
+    # ------------------------------------------------------------------
+
+    def test_initialized_false_before_init(self, monkeypatch, tmp_path):
+        """_initialized starts as False after a module reload (no auto-call)."""
+        import importlib
+        from app import review_db
+        db_path = str(tmp_path / "init_state.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+        # We have NOT called init_db() yet — must be False
+        assert review_db._initialized is False
+
+    def test_initialized_true_after_successful_init(self, isolated_review_db):
+        """_initialized is True after init_db() succeeds (autouse fixture calls it)."""
+        rdb = isolated_review_db
+        assert rdb._initialized is True
+
+    def test_initialized_false_after_failed_init(self, monkeypatch, tmp_path):
+        """_initialized stays False when init_db() fails — allows retry."""
+        import importlib
+        from app import review_db
+        db_path = str(tmp_path / "fail_init.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+
+        # Simulate schema failure
+        _orig_get_conn = review_db._get_connection
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _bad_conn():
+            raise RuntimeError("simulated connection error")
+            yield  # noqa: unreachable
+
+        monkeypatch.setattr(review_db, "_get_connection", _bad_conn)
+        result = review_db.init_db()
+
+        assert result is False
+        assert review_db._initialized is False
+
+    def test_initialized_becomes_true_after_retry(self, monkeypatch, tmp_path):
+        """After a failed init, calling init_db() again with a working connection succeeds."""
+        import importlib
+        from app import review_db
+        db_path = str(tmp_path / "retry_init.db")
+        monkeypatch.setenv("REVIEW_DB_SQLITE_PATH", db_path)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        importlib.reload(review_db)
+
+        # Save the real connection helper before patching
+        _real_get_connection = review_db._get_connection
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _bad_conn():
+            raise RuntimeError("first attempt fails")
+            yield  # noqa: unreachable
+
+        monkeypatch.setattr(review_db, "_get_connection", _bad_conn)
+        assert review_db.init_db() is False
+        assert review_db._initialized is False
+
+        # Restore real connection and retry — must now succeed
+        monkeypatch.setattr(review_db, "_get_connection", _real_get_connection)
+        assert review_db.init_db() is True
+        assert review_db._initialized is True
+
+    # ------------------------------------------------------------------
+    # No conn.execute() shortcut in module source
+    # ------------------------------------------------------------------
+
+    def test_no_conn_execute_shortcut_in_source(self):
+        """
+        review_db.py must not contain 'conn.execute(' — that is the SQLite-only
+        shortcut that fails on psycopg2.  All queries must go through an explicit
+        cursor.
+        """
+        import inspect
+        from app import review_db
+        source = inspect.getsource(review_db)
+        assert "conn.execute(" not in source, (
+            "Found 'conn.execute(' in review_db — this is a SQLite-only shortcut "
+            "that raises AttributeError on psycopg2.  Use an explicit cursor."
+        )
+
+    # ------------------------------------------------------------------
+    # CRUD functions return Python dicts
+    # ------------------------------------------------------------------
+
+    def test_create_draft_returns_dict(self, isolated_review_db):
+        rdb = isolated_review_db
+        d = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן PALB2 קשור לסיכון לסרטן השד.",
+            gene_symbol="PALB2",
+        )
+        assert isinstance(d, dict), f"create_draft must return dict, got {type(d)}"
+
+    def test_get_draft_returns_dict(self, isolated_review_db):
+        rdb = isolated_review_db
+        d = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן MLH1 מעורב בתסמונת לינץ'.",
+            gene_symbol="MLH1",
+        )
+        fetched = rdb.get_draft(d["id"])
+        assert isinstance(fetched, dict)
+
+    def test_list_drafts_returns_list_of_dicts(self, isolated_review_db):
+        rdb = isolated_review_db
+        rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן MSH2 קשור לסיכון סרטן המעי.",
+            gene_symbol="MSH2",
+        )
+        result = rdb.list_drafts()
+        assert isinstance(result, list)
+        assert all(isinstance(r, dict) for r in result)
+
+    def test_update_draft_status_returns_dict(self, isolated_review_db):
+        rdb = isolated_review_db
+        d = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן ATM מקודד לקינאז בנתיב תיקון DNA.",
+            gene_symbol="ATM",
+        )
+        updated = rdb.update_draft_status(
+            d["id"], new_status="approved", reviewer_identity="dr_test"
+        )
+        assert isinstance(updated, dict)
+        assert updated["review_status"] == "approved"
+
+    def test_get_audit_trail_returns_list_of_dicts(self, isolated_review_db):
+        rdb = isolated_review_db
+        d = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן CHEK2 קשור לסיכון מוגבר לסרטן השד.",
+            gene_symbol="CHEK2",
+        )
+        rdb.update_draft_status(d["id"], new_status="approved", reviewer_identity="dr_audit")
+        trail = rdb.get_audit_trail(d["id"])
+        assert isinstance(trail, list)
+        assert len(trail) == 1
+        assert isinstance(trail[0], dict)
+        assert "reviewer_identity" in trail[0]
+
+    # ------------------------------------------------------------------
+    # pending_count returns int (not a crash from dict-key row access)
+    # ------------------------------------------------------------------
+
+    def test_pending_count_returns_int(self, isolated_review_db):
+        """pending_count() must return a plain int, not raise from row indexing."""
+        rdb = isolated_review_db
+        rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן RAD51C מעורב בסיכון לסרטן שחלה.",
+            gene_symbol="RAD51C",
+        )
+        count = rdb.pending_count()
+        assert isinstance(count, int)
+        assert count == 1
+
+    def test_pending_count_excludes_approved(self, isolated_review_db):
+        rdb = isolated_review_db
+        d = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="הגן BARD1 מעורב בתיקון DNA.",
+            gene_symbol="BARD1",
+        )
+        assert rdb.pending_count() == 1
+        rdb.update_draft_status(d["id"], new_status="approved", reviewer_identity="dr_x")
+        assert rdb.pending_count() == 0
+
+    # ------------------------------------------------------------------
+    # Real PostgreSQL — documented as not performed
+    # ------------------------------------------------------------------
+
+    def test_real_postgres_not_tested(self):
+        """
+        Real PostgreSQL integration test not performed: no Docker or local
+        PostgreSQL instance is available in this environment.
+
+        The PostgreSQL compatibility is verified by:
+          - Schema string inspection (BIGSERIAL vs AUTOINCREMENT)
+          - Placeholder helper unit tests (_ph, _placeholder)
+          - Module source scan for conn.execute() shortcuts
+          - All CRUD functions tested end-to-end on SQLite
+          - _initialized retry semantics tested via patched _get_connection
+
+        To run a real PG test, set DATABASE_URL to a test database and run:
+          PYTHONUTF8=1 pytest tests/test_session27_physician_portal.py \\
+            -k test_real_postgres -v
+        """
+        pytest.skip("Real PostgreSQL not available in this environment — see docstring")

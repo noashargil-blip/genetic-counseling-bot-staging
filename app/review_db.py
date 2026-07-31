@@ -66,6 +66,8 @@ _USE_POSTGRES = _DATABASE_URL.startswith("postgres")
 # Schema
 # ---------------------------------------------------------------------------
 
+# review_drafts table is identical for both backends — only TEXT/INTEGER types
+# that both engines handle identically.
 _CREATE_DRAFTS = """
 CREATE TABLE IF NOT EXISTS review_drafts (
     id                  TEXT PRIMARY KEY,
@@ -93,9 +95,27 @@ CREATE TABLE IF NOT EXISTS review_drafts (
 )
 """
 
-_CREATE_AUDIT = """
+# review_audit primary-key auto-increment differs between engines.
+# SQLite: INTEGER PRIMARY KEY AUTOINCREMENT
+# PostgreSQL: AUTOINCREMENT is invalid — use BIGSERIAL (or BIGINT GENERATED AS IDENTITY)
+_CREATE_AUDIT_SQLITE = """
 CREATE TABLE IF NOT EXISTS review_audit (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id            TEXT NOT NULL,
+    action              TEXT NOT NULL,
+    prev_status         TEXT NOT NULL,
+    new_status          TEXT NOT NULL,
+    reviewer_identity   TEXT,
+    timestamp           TEXT NOT NULL,
+    review_comment      TEXT,
+    text_was_edited     INTEGER NOT NULL DEFAULT 0,
+    revision            INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+_CREATE_AUDIT_PG = """
+CREATE TABLE IF NOT EXISTS review_audit (
+    id                  BIGSERIAL PRIMARY KEY,
     draft_id            TEXT NOT NULL,
     action              TEXT NOT NULL,
     prev_status         TEXT NOT NULL,
@@ -131,13 +151,21 @@ def _content_hash(text: str) -> str:
 
 @contextmanager
 def _get_connection() -> Generator:
-    """Yield a DB-API 2.0 connection; commit on success, rollback on error."""
+    """
+    Yield a DB-API 2.0 connection; commit on success, rollback on error.
+
+    PostgreSQL: connects with psycopg2.extras.RealDictCursor as the default
+    cursor factory so that all rows support dict(row) uniformly.
+
+    SQLite: sets row_factory = sqlite3.Row for the same dict(row) semantics.
+    """
     if _USE_POSTGRES:
         try:
             import psycopg2
-            conn = psycopg2.connect(_DATABASE_URL)
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(_DATABASE_URL, cursor_factory=RealDictCursor)
         except Exception as exc:
-            logger.error("review_db: PostgreSQL connection failed: %s", exc)
+            logger.error("review_db: PostgreSQL connection failed: %s", type(exc).__name__)
             raise
     else:
         _SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -154,13 +182,25 @@ def _get_connection() -> Generator:
 
 
 def _placeholder(n: int = 1) -> str:
-    """Return %s for PostgreSQL, ? for SQLite."""
+    """Return %s for PostgreSQL, ? for SQLite — repeated n times."""
     token = "%s" if _USE_POSTGRES else "?"
     return ", ".join([token] * n)
 
 
 def _ph() -> str:
     return "%s" if _USE_POSTGRES else "?"
+
+
+def _row_to_dict(row) -> Optional[dict]:
+    """
+    Convert a DB row to a plain dict, regardless of backend.
+
+    sqlite3.Row:   supports dict(row) via keys() + __iter__
+    RealDictRow:   supports dict(row) natively
+    """
+    if row is None:
+        return None
+    return dict(row)
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +211,18 @@ _initialized = False
 
 
 def init_db() -> bool:
-    """Create tables if they don't exist. Returns True on success."""
+    """
+    Create tables and indexes if they don't exist.  Idempotent (IF NOT EXISTS).
+    Returns True on success, False on failure.
+    Never sets _initialized = True unless the schema commit succeeded.
+    """
     global _initialized
+    _create_audit = _CREATE_AUDIT_PG if _USE_POSTGRES else _CREATE_AUDIT_SQLITE
     try:
         with _get_connection() as conn:
             cur = conn.cursor()
             cur.execute(_CREATE_DRAFTS)
-            cur.execute(_CREATE_AUDIT)
+            cur.execute(_create_audit)
             for idx_sql in _CREATE_INDEXES:
                 cur.execute(idx_sql)
         _initialized = True
@@ -236,8 +281,10 @@ def create_draft(
         with _get_connection() as conn:
             cur = conn.cursor()
 
-            # Deduplication: check for existing pending/needs_revision record
-            existing = cur.execute(
+            # Deduplication: check for existing pending/needs_revision record.
+            # Split execute() and fetchone() — psycopg2.cursor.execute() returns
+            # None (not the cursor), so chaining .fetchone() on it would fail.
+            cur.execute(
                 f"""
                 SELECT id, seen_count FROM review_drafts
                 WHERE content_hash = {ph}
@@ -246,16 +293,17 @@ def create_draft(
                 LIMIT 1
                 """,
                 (chash, gene, gene),
-            ).fetchone()
+            )
+            existing = cur.fetchone()
 
             if existing:
-                row = dict(existing)
+                existing_dict = _row_to_dict(existing)
                 cur.execute(
                     f"UPDATE review_drafts SET last_seen_at = {ph}, seen_count = {ph} WHERE id = {ph}",
-                    (now, row["seen_count"] + 1, row["id"]),
+                    (now, existing_dict["seen_count"] + 1, existing_dict["id"]),
                 )
                 logger.debug("review_db: duplicate draft for gene=%s, updated last_seen_at", gene)
-                return get_draft(row["id"], conn=conn)
+                return get_draft(existing_dict["id"], _cur=cur)
 
             # Insert new record
             draft_id = str(uuid.uuid4())
@@ -280,35 +328,44 @@ def create_draft(
                 ),
             )
             logger.info("review_db: created draft %s for gene=%s", draft_id, gene)
-            return get_draft(draft_id, conn=conn)
+            return get_draft(draft_id, _cur=cur)
 
     except Exception as exc:
         logger.error("review_db: create_draft failed for gene=%s: %s", gene, type(exc).__name__)
         return None
 
 
-def get_draft(draft_id: str, *, conn=None) -> Optional[dict]:
-    """Return a single draft record by id, or None."""
+def get_draft(draft_id: str, *, _cur=None) -> Optional[dict]:
+    """
+    Return a single draft record by id, or None.
+
+    _cur: optional open cursor to reuse within an existing transaction.
+          Accepts a cursor (not a connection) so the call works on both
+          SQLite and psycopg2 without relying on connection.execute() shortcut.
+    """
     ph = _ph()
 
-    def _fetch(c):
-        row = c.execute(
+    def _fetch(cur):
+        # Split execute + fetchone — psycopg2 cursor.execute() returns None.
+        cur.execute(
             f"SELECT * FROM review_drafts WHERE id = {ph}",
             (draft_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if row is None:
             return None
-        d = dict(row)
+        d = _row_to_dict(row)
         d["effective_text"] = d.get("physician_edited_text") or d.get("original_ai_text", "")
         d["physician_reviewed"] = d.get("reviewed_by") is not None
         d["physician_approved"] = d.get("review_status") == "approved"
         return d
 
-    if conn is not None:
-        return _fetch(conn)
+    if _cur is not None:
+        return _fetch(_cur)
     try:
-        with _get_connection() as c:
-            return _fetch(c)
+        with _get_connection() as conn:
+            cur = conn.cursor()
+            return _fetch(cur)
     except Exception as exc:
         logger.error("review_db: get_draft(%s) failed: %s", draft_id, type(exc).__name__)
         return None
@@ -340,7 +397,9 @@ def list_drafts(
 
             where = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-            rows = conn.execute(
+            # Use explicit cursor — psycopg2 Connection has no .execute() shortcut.
+            cur = conn.cursor()
+            cur.execute(
                 f"""
                 SELECT * FROM review_drafts
                 {where}
@@ -350,11 +409,12 @@ def list_drafts(
                 LIMIT {ph} OFFSET {ph}
                 """,
                 params + [limit, offset],
-            ).fetchall()
+            )
+            rows = cur.fetchall()
 
             result = []
             for row in rows:
-                d = dict(row)
+                d = _row_to_dict(row)
                 d["effective_text"] = d.get("physician_edited_text") or d.get("original_ai_text", "")
                 d["physician_reviewed"] = d.get("reviewed_by") is not None
                 d["physician_approved"] = d.get("review_status") == "approved"
@@ -383,15 +443,18 @@ def update_draft_status(
     try:
         with _get_connection() as conn:
             ph = _ph()
-            row = conn.execute(
+            # Use explicit cursor — psycopg2 Connection has no .execute() shortcut.
+            cur = conn.cursor()
+            cur.execute(
                 f"SELECT * FROM review_drafts WHERE id = {ph}",
                 (draft_id,),
-            ).fetchone()
+            )
+            row = cur.fetchone()
 
             if row is None:
                 raise ValueError(f"Draft not found: {draft_id!r}")
 
-            record = dict(row)
+            record = _row_to_dict(row)
             prev_status = record["review_status"]
 
             if new_status not in ALLOWED_TRANSITIONS.get(prev_status, set()):
@@ -401,35 +464,54 @@ def update_draft_status(
 
             now = _now_iso()
             new_revision = record["revision"] + 1
-            text_was_edited = physician_edited_text is not None and physician_edited_text.strip() != ""
-            ph = _ph()
-
-            conn.execute(
-                f"""
-                UPDATE review_drafts SET
-                    review_status = {ph},
-                    review_comment = {ph},
-                    physician_edited_text = CASE WHEN {ph} THEN {ph} ELSE physician_edited_text END,
-                    reviewed_at = {ph},
-                    reviewed_by = {ph},
-                    revision = {ph},
-                    updated_at = {ph}
-                WHERE id = {ph}
-                """,
-                (
-                    new_status,
-                    review_comment,
-                    1 if text_was_edited else 0, physician_edited_text if text_was_edited else None,
-                    now,
-                    reviewer_identity,
-                    new_revision,
-                    now,
-                    draft_id,
-                ),
+            text_was_edited = (
+                physician_edited_text is not None
+                and physician_edited_text.strip() != ""
             )
 
+            # Build UPDATE without CASE WHEN integer — PostgreSQL requires
+            # boolean operands in CASE WHEN, not integers.
+            if text_was_edited:
+                cur.execute(
+                    f"""
+                    UPDATE review_drafts SET
+                        review_status = {ph},
+                        review_comment = {ph},
+                        physician_edited_text = {ph},
+                        reviewed_at = {ph},
+                        reviewed_by = {ph},
+                        revision = {ph},
+                        updated_at = {ph}
+                    WHERE id = {ph}
+                    """,
+                    (
+                        new_status, review_comment,
+                        physician_edited_text,
+                        now, reviewer_identity, new_revision, now,
+                        draft_id,
+                    ),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    UPDATE review_drafts SET
+                        review_status = {ph},
+                        review_comment = {ph},
+                        reviewed_at = {ph},
+                        reviewed_by = {ph},
+                        revision = {ph},
+                        updated_at = {ph}
+                    WHERE id = {ph}
+                    """,
+                    (
+                        new_status, review_comment,
+                        now, reviewer_identity, new_revision, now,
+                        draft_id,
+                    ),
+                )
+
             # Audit record
-            conn.execute(
+            cur.execute(
                 f"""
                 INSERT INTO review_audit
                     (draft_id, action, prev_status, new_status, reviewer_identity,
@@ -442,7 +524,7 @@ def update_draft_status(
                 ),
             )
 
-            return get_draft(draft_id, conn=conn)
+            return get_draft(draft_id, _cur=cur)
 
     except ValueError:
         raise
@@ -456,11 +538,13 @@ def get_audit_trail(draft_id: str) -> List[dict]:
     try:
         ph = _ph()
         with _get_connection() as conn:
-            rows = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 f"SELECT * FROM review_audit WHERE draft_id = {ph} ORDER BY id ASC",
                 (draft_id,),
-            ).fetchall()
-            return [dict(r) for r in rows]
+            )
+            rows = cur.fetchall()
+            return [_row_to_dict(r) for r in rows]
     except Exception as exc:
         logger.error("review_db: get_audit_trail(%s) failed: %s", draft_id, type(exc).__name__)
         return []
@@ -470,10 +554,16 @@ def pending_count() -> int:
     """Return number of drafts awaiting review."""
     try:
         with _get_connection() as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM review_drafts WHERE review_status IN ('pending', 'needs_revision')"
-            ).fetchone()
-            return int(row[0]) if row else 0
+            cur = conn.cursor()
+            # Alias the aggregate so both backends expose it by name, not
+            # by index.  psycopg2 RealDictCursor returns {'cnt': N};
+            # sqlite3.Row also supports key access as row["cnt"].
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM review_drafts"
+                " WHERE review_status IN ('pending', 'needs_revision')"
+            )
+            row = cur.fetchone()
+            return int(_row_to_dict(row)["cnt"]) if row else 0
     except Exception:
         return 0
 
@@ -486,7 +576,8 @@ def get_approved_draft(gene_symbol: str, draft_type: str = "gene_summary") -> Op
     try:
         with _get_connection() as conn:
             ph = _ph()
-            row = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 f"""
                 SELECT * FROM review_drafts
                 WHERE gene_symbol = {ph}
@@ -496,10 +587,11 @@ def get_approved_draft(gene_symbol: str, draft_type: str = "gene_summary") -> Op
                 LIMIT 1
                 """,
                 (gene_symbol.upper(), draft_type),
-            ).fetchone()
+            )
+            row = cur.fetchone()
             if row is None:
                 return None
-            d = dict(row)
+            d = _row_to_dict(row)
             d["effective_text"] = d.get("physician_edited_text") or d.get("original_ai_text", "")
             d["physician_reviewed"] = True
             d["physician_approved"] = True
@@ -507,10 +599,3 @@ def get_approved_draft(gene_symbol: str, draft_type: str = "gene_summary") -> Op
     except Exception as exc:
         logger.error("review_db: get_approved_draft(%s) failed: %s", gene_symbol, type(exc).__name__)
         return None
-
-
-# Initialize on module load (non-fatal)
-try:
-    init_db()
-except Exception:
-    pass
