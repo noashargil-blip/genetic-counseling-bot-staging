@@ -2241,3 +2241,162 @@ class TestSession275PatientDraftCard:
         assert edited in data.get("answer", ""), (
             "Approved_only mode must serve the physician-edited approved text"
         )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestSession276DraftCardInteraction — Session 27.6
+#
+# Verifies:
+#  A. Tier-2 main answer uses a ClinVar reference (not the bridge or draft text).
+#  C. Duplication-control metadata fields are present and correct.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestSession276DraftCardInteraction:
+    """
+    Session 27.6 — restore useful Tier-2 answers and duplication control.
+
+    Changes from Session 27.5 → 27.6:
+    - Main answer no longer uses the generic bridge message ("נמצא מידע נוסף…").
+      Instead it cites the ClinVar data card and leaves the draft as supplemental.
+    - gene_metadata gains two new fields:
+        unverified_gene_draft_displayable — False when draft ≈ main answer.
+        draft_hidden_reason               — None or a short reason string.
+    """
+
+    def _ask_with_fake_draft(self, question, monkeypatch, gene, draft_text):
+        import importlib
+        from app import counseling_engine
+        fake_draft = {
+            "visible": True,
+            "status": "unreviewed",
+            "gene_symbol": gene,
+            "warning_he": "מידע AI לא מאומת",
+            "text_he": draft_text,
+            "generated_by_model": "test-model",
+            "review_status": "unreviewed",
+            "approved": False,
+            "generated_at": "2026-01-01T00:00:00Z",
+        }
+        monkeypatch.setattr(
+            counseling_engine,
+            "_generate_unverified_gene_draft",
+            lambda gene, question="", clinvar_context=None,
+                   use_lenient_validator=False, _debug=None: fake_draft,
+        )
+        from fastapi.testclient import TestClient
+        from app.main import app
+        client = TestClient(app)
+        r = client.post("/ask", json={"question": question})
+        assert r.status_code == 200, f"POST /ask failed: {r.text}"
+        return r.json()
+
+    # ------------------------------------------------------------------
+    # Part A — main answer for Tier-2 + draft
+    # ------------------------------------------------------------------
+
+    def test_main_answer_cites_clinvar_for_tier2_with_draft(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        When a Tier-2 gene has a pending AI draft, the main patient answer must
+        reference ClinVar data — not use a generic bridge nor the draft text.
+        """
+        data = self._ask_with_fake_draft(
+            "מה זה גן CCR5?", monkeypatch, "CCR5",
+            "CCR5 מקודד לקולטן כמוקין."
+        )
+        answer = data.get("answer", "")
+        assert "ClinVar" in answer, (
+            f"Main answer must reference ClinVar for Tier-2 gene; got: {answer!r}"
+        )
+
+    def test_main_answer_does_not_contain_draft_text_tier2(
+        self, isolated_review_db, monkeypatch
+    ):
+        """The draft biology text must not appear verbatim in the main answer."""
+        draft_text = "UNIQUE_DRAFT_MARKER_27.6_אבג"
+        data = self._ask_with_fake_draft(
+            "מה זה גן CCR5?", monkeypatch, "CCR5", draft_text
+        )
+        assert draft_text not in data.get("answer", ""), (
+            "Draft biology text must not appear in the main answer bubble"
+        )
+
+    def test_main_answer_does_not_say_no_info_when_draft_available(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        When a draft exists the main answer must not claim 'no info available'.
+        (The tier2_fallback_answer phrase 'אין לי סיכום' must be absent.)
+        """
+        data = self._ask_with_fake_draft(
+            "מה זה גן CCR5?", monkeypatch, "CCR5",
+            "CCR5 מקודד לקולטן."
+        )
+        answer = data.get("answer", "")
+        assert "אין לי סיכום" not in answer, (
+            f"Main answer must not claim 'no info' when a draft exists; got: {answer!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Part C — duplication-control metadata fields
+    # ------------------------------------------------------------------
+
+    def test_unverified_gene_draft_displayable_field_present(
+        self, isolated_review_db, monkeypatch
+    ):
+        """gene_metadata must include the unverified_gene_draft_displayable field."""
+        data = self._ask_with_fake_draft(
+            "מה זה גן CCR5?", monkeypatch, "CCR5", "CCR5 מקודד לקולטן."
+        )
+        meta = data.get("gene_metadata") or {}
+        assert "unverified_gene_draft_displayable" in meta, (
+            f"gene_metadata missing unverified_gene_draft_displayable; keys={list(meta)}"
+        )
+
+    def test_draft_hidden_reason_field_present(
+        self, isolated_review_db, monkeypatch
+    ):
+        """gene_metadata must include the draft_hidden_reason field."""
+        data = self._ask_with_fake_draft(
+            "מה זה גן CCR5?", monkeypatch, "CCR5", "CCR5 מקודד לקולטן."
+        )
+        meta = data.get("gene_metadata") or {}
+        assert "draft_hidden_reason" in meta, (
+            f"gene_metadata missing draft_hidden_reason; keys={list(meta)}"
+        )
+
+    def test_draft_displayable_true_for_meaningful_draft(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        When the draft contains substantially different content from the main
+        answer, unverified_gene_draft_displayable must be True and
+        draft_hidden_reason must be None.
+        """
+        data = self._ask_with_fake_draft(
+            "מה זה גן CCR5?", monkeypatch, "CCR5",
+            "CCR5 הוא גן המקודד לקולטן כמוקין CCR5 המבוטא על תאי T."
+        )
+        meta = data.get("gene_metadata") or {}
+        assert meta.get("unverified_gene_draft_displayable") is True, (
+            f"Draft should be displayable when it differs from main answer; meta={meta}"
+        )
+        assert meta.get("draft_hidden_reason") is None, (
+            f"draft_hidden_reason should be None when draft is displayable; got={meta.get('draft_hidden_reason')}"
+        )
+
+    def test_draft_promoted_to_answer_still_false(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        Session 27.6 must preserve Session 27.5's invariant:
+        draft_promoted_to_answer is always False for pending drafts.
+        """
+        data = self._ask_with_fake_draft(
+            "מה זה גן CCR5?", monkeypatch, "CCR5", "CCR5 מקודד לקולטן."
+        )
+        meta = data.get("gene_metadata") or {}
+        assert meta.get("draft_promoted_to_answer") is False, (
+            f"draft_promoted_to_answer must remain False; meta={meta}"
+        )

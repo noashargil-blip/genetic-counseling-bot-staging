@@ -3258,6 +3258,26 @@ def _call_local_llm_for_gene_summary(
         return None
 
 
+def _draft_adds_meaningful_information(draft_text: str, main_answer: str) -> bool:
+    """True when the draft provides content meaningfully different from main_answer.
+
+    Suppresses the patient card only when draft ≈ main answer (>65% word
+    overlap), which in practice only happens if the draft was somehow used
+    verbatim as the main answer.  For normal Tier-2 answers (ClinVar reference
+    sentence) the draft biology text will always be displayable.
+    """
+    if not draft_text:
+        return False
+    if not main_answer:
+        return True
+    draft_words = set(draft_text.split())
+    answer_words = set(main_answer.split())
+    if not draft_words:
+        return False
+    overlap = len(draft_words & answer_words) / len(draft_words)
+    return overlap < 0.65
+
+
 def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene_draft: bool = False, corrected_from: "Optional[str]" = None) -> Optional[dict]:
     """
     Build the full /ask response for a gene-level ClinVar question.
@@ -3466,16 +3486,31 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             main_answer = tier2_fallback_answer
             draft_available = False
     elif draft_available and unverified_draft:
-        # Bridge: honest, concise, does not falsely say "no information".
-        # Full draft text is in the collapsed card — not duplicated here.
+        # Main patient answer: references existing ClinVar data (always present
+        # for Tier-2) without claiming "no info" — the AI draft provides
+        # supplemental biology text in the collapsed card.
+        # The draft text itself is NEVER placed here (no duplication, no
+        # unreviewed content in the main bubble).
         main_answer = (
             _correction_prefix_t2
-            + f"נמצא מידע נוסף על התפקיד הביולוגי של הגן {gene}. "
-            + "ניתן לפתוח את טיוטת ה-AI הלא מבוקרת המצורפת. "
-            + "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
+            + f"לגן {gene} ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע. "
+            + "מידע כללי נוסף על הגן זמין בטיוטת ה-AI הלא מבוקרת המצורפת. "
+            + "לשאלות ספציפיות, פנה לצוות הגנטי שטיפל בך."
         )
     else:
         main_answer = tier2_fallback_answer
+
+    # Duplication control: only show the draft card when it adds content that
+    # isn't already present in the main answer.  For normal Tier-2 answers the
+    # overlap is negligible so draft_displayable will almost always be True.
+    _draft_text_he = (unverified_draft or {}).get("text_he", "")
+    draft_displayable = (
+        draft_available
+        and _draft_adds_meaningful_information(_draft_text_he, main_answer)
+    )
+    _draft_hidden_reason: "Optional[str]" = (
+        None if draft_displayable else ("no_draft" if not draft_available else "identical_to_main_answer")
+    )
 
     result: dict = {
         "answer": main_answer,
@@ -3496,6 +3531,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             "answer_tier": "tier2",
             "gene_knowledge_status": "unverified_available",
             "unverified_gene_draft_available": draft_available,
+            # True only when the draft adds content not already in the main answer.
+            "unverified_gene_draft_displayable": draft_displayable,
+            "draft_hidden_reason": _draft_hidden_reason,
             # Pending drafts are never promoted into the main answer bubble.
             # The draft is shown separately in a collapsed patient card.
             "draft_promoted_to_answer": False,

@@ -537,23 +537,31 @@ async function loadUnverifiedDraft(msgId) {
     msg.unverifiedDraft = null;
   }
   msg.unverifiedDraftState = 'loaded';
+  // Auto-expand the details when the user explicitly triggered the load via the
+  // button (state was null before).  Pre-populated drafts (state was already
+  // 'loaded' from the initial response) start collapsed — user must expand.
+  if (msg.unverifiedDraft) {
+    msg.unverifiedDraftOpen = true;
+  }
   renderMessages();
 }
 
 function buildUnverifiedDraftCard(msg) {
   const meta = msg.geneMetadata;
-  // Only show the draft card when the backend confirmed a draft was generated
-  // (unverified_gene_draft_available=true, set after the actual attempt).
-  // Pending drafts are never promoted to the main answer (draft_promoted_to_answer
-  // is always false for pending drafts since Session 27.5), so no duplicate check
-  // is needed — the card and the main bubble always contain different text.
+  // Guard: only show when backend confirmed a draft was generated AND it adds
+  // content beyond the main answer.  unverified_gene_draft_displayable===false
+  // means the backend decided the draft would duplicate the main bubble.
+  // Absent field (older backend) is treated as displayable for compatibility.
   if (!meta || meta.answer_tier !== 'tier2' || !meta.unverified_gene_draft_available) return null;
+  if (meta.unverified_gene_draft_displayable === false) return null;
 
   const card = document.createElement('div');
   card.className = 'unverified-draft-card';
 
   if (msg.unverifiedDraftState === null) {
-    // Draft was not pre-populated in the initial response — offer manual fetch
+    // Draft not yet loaded — offer a manual fetch button.
+    // After the fetch succeeds, loadUnverifiedDraft() sets
+    // msg.unverifiedDraftOpen=true so the details auto-expand.
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'unverified-draft-btn';
@@ -571,15 +579,26 @@ function buildUnverifiedDraftCard(msg) {
       const d = msg.unverifiedDraft;
       const details = document.createElement('details');
       details.className = 'unverified-draft-details';
-      // Collapsed by default — patient must actively expand.
-      details.open = false;
+
+      // Restore the expand/collapse state the user previously set.
+      // Without this, every renderMessages() call would reset the element to
+      // collapsed, discarding any user interaction.
+      details.open = !!msg.unverifiedDraftOpen;
+
+      // Keep msg.unverifiedDraftOpen in sync when the user toggles.
+      // Uses the native <details> toggle event which fires on both expand and
+      // collapse.  The listener is added fresh each render but that is safe:
+      // msg.unverifiedDraftOpen persists across renders in the message object.
+      details.addEventListener('toggle', () => {
+        msg.unverifiedDraftOpen = details.open;
+      });
 
       const summary = document.createElement('summary');
       summary.className = 'unverified-draft-summary';
       summary.textContent = 'טיוטת AI לא מבוקרת';
       details.appendChild(summary);
 
-      // Mandatory warning shown before every draft — must appear before the text.
+      // Mandatory warning — always shown before the draft text.
       const warning = document.createElement('p');
       warning.className = 'unverified-draft-warning';
       warning.textContent =
@@ -599,10 +618,9 @@ function buildUnverifiedDraftCard(msg) {
 
       card.appendChild(details);
     }
-    // If loaded but no draft object: show nothing. The backend sets
-    // unverified_gene_draft_available=false when draft fails, so in practice
-    // this branch (loaded + null) should not be reached in normal flow.
-    // Do NOT show any error message here — absence of draft is silent.
+    // If loaded but no draft object: silent — backend sets
+    // unverified_gene_draft_available=false on failure, so this branch is
+    // unreachable in normal flow.
   }
 
   return card;
