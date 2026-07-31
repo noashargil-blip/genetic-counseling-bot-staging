@@ -1236,8 +1236,8 @@ function renderActionBar(draft) {
     html += `<button class="btn btn-ghost btn-sm" onclick="startEdit()">✏️ עריכה</button>`;
     html += `<div class="spacer"></div>`;
     html += `<button class="btn btn-ghost btn-sm" onclick="openModal('needs_revision')">🔄 לתיקון</button>`;
-    html += `<button class="btn btn-danger btn-sm" onclick="openModal('rejected')">✕ דחייה</button>`;
-    html += `<button class="btn btn-success btn-sm" onclick="openModal('approved')">✓ אישור</button>`;
+    html += `<button class="btn btn-danger btn-sm" onclick="openModal('reject')">✕ דחייה</button>`;
+    html += `<button class="btn btn-success btn-sm" onclick="openModal('approve')">✓ אישור</button>`;
   } else if (status === 'approved') {
     html += `<div class="spacer"></div>`;
     html += `<span style="font-size:12.5px;color:var(--success);">✓ טיוטה זו מאושרת ופעילה</span>`;
@@ -1275,37 +1275,52 @@ async function submitEdit() {
 }
 
 /* ── Modal / actions ─────────────────────────────────────────── */
+// Keys are the action verbs sent to the API (approve / reject / needs_revision).
 const MODAL_CONFIG = {
-  approved: {
+  approve: {
     title: 'אישור טיוטה',
     desc: 'הטיוטה תסומן כמאושרת ותוצג למשתמשים (בהתאם להגדרות נראות). האם להמשיך?',
     btnClass: 'btn-success', btnText: '✓ אישור',
   },
-  rejected: {
+  reject: {
     title: 'דחיית טיוטה',
-    desc: 'הטיוטה תסומן כנדחית ולא תוצג למשתמשים. פעולה זו אינה הפיכה.',
+    desc: 'הטיוטה תסומן כנדחית ולא תוצג למשתמשים. נדרשת הערה. פעולה זו אינה הפיכה.',
     btnClass: 'btn-danger', btnText: '✕ דחייה',
   },
   needs_revision: {
     title: 'בקשת תיקון',
-    desc: 'הטיוטה תחזור לתור הסקירה עם סימון "נדרש תיקון".',
+    desc: 'הטיוטה תחזור לתור הסקירה עם סימון "נדרש תיקון". נדרשת הערה.',
     btnClass: 'btn-primary', btnText: '🔄 שלח לתיקון',
   },
 };
 
+// _pendingAction stores the action string while the modal is open.
+// IMPORTANT: closeModal() clears it.  Always capture to a local variable
+// before calling closeModal() — the root cause of the Session 27.5 422 bug.
 let _pendingAction = null;
+let _submitting = false;
 
 function openModal(action) {
   _pendingAction = action;
   const cfg = MODAL_CONFIG[action];
   document.getElementById('modalTitle').textContent = cfg.title;
   document.getElementById('modalDesc').textContent = cfg.desc;
+
+  // Show/hide comment requirement indicator
+  const commentLabel = document.querySelector('#modalCommentGroup label');
+  const requiresComment = (action === 'rejected' || action === 'needs_revision');
+  if (commentLabel) {
+    commentLabel.textContent = requiresComment ? 'הערה (חובה)' : 'הערה (אופציונלי)';
+  }
   document.getElementById('modalComment').value = '';
+
   const btn = document.getElementById('modalConfirmBtn');
   btn.className = `btn ${cfg.btnClass}`;
   btn.textContent = cfg.btnText;
   btn.onclick = confirmAction;
   document.getElementById('actionModal').classList.add('show');
+  // Focus the comment textarea so keyboard users can type immediately
+  setTimeout(() => document.getElementById('modalComment').focus(), 50);
 }
 
 function closeModal() {
@@ -1314,19 +1329,37 @@ function closeModal() {
 }
 
 async function confirmAction() {
-  if (!_pendingAction || !S.selected) return;
+  if (!_pendingAction || !S.selected || _submitting) return;
+
+  // ── Capture action BEFORE closeModal() nulls _pendingAction ──
+  // Root cause of the 422: the old code called closeModal() first, then read
+  // _pendingAction (now null), sending {action: null} → Pydantic 422.
+  const action = _pendingAction;
   const comment = document.getElementById('modalComment').value.trim();
   const editedText = S.selected._pendingEdit || null;
+  const revision = typeof S.selected.revision === 'number' ? S.selected.revision : 0;
+
+  // Client-side comment validation for reject / needs_revision
+  if ((action === 'rejected' || action === 'needs_revision') && !comment) {
+    toast('נדרשת הערה לדחייה ובקשת תיקון.', 'error');
+    return;
+  }
+
   closeModal();
 
-  const btn = document.querySelector(`[onclick="openModal('${_pendingAction}')"]`);
+  // Prevent duplicate submissions
+  _submitting = true;
+  const confirmBtn = document.getElementById('modalConfirmBtn');
+  if (confirmBtn) confirmBtn.disabled = true;
+
   try {
     const data = await apiFetch(`/drafts/${S.selected.id}/review`, {
       method: 'POST',
       body: {
-        new_status: _pendingAction,
-        review_comment: comment || null,
+        action,
+        revision,
         physician_edited_text: editedText,
+        review_comment: comment || null,
       },
     });
     const updated = data.draft;
@@ -1339,14 +1372,17 @@ async function confirmAction() {
       renderQueue();
       renderDetail(updated);
       toast(
-        _pendingAction === 'approved' ? 'הטיוטה אושרה ✓' :
-        _pendingAction === 'rejected' ? 'הטיוטה נדחתה' :
+        action === 'approve' ? 'הטיוטה אושרה ✓' :
+        action === 'reject'  ? 'הטיוטה נדחתה' :
         'הטיוטה הועברה לתיקון',
-        _pendingAction === 'approved' ? 'success' : 'default'
+        action === 'approve' ? 'success' : 'default'
       );
     }
   } catch (e) {
     toast('שגיאה: ' + e.message, 'error');
+  } finally {
+    _submitting = false;
+    if (confirmBtn) confirmBtn.disabled = false;
   }
 }
 

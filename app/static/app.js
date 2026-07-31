@@ -542,12 +542,12 @@ async function loadUnverifiedDraft(msgId) {
 
 function buildUnverifiedDraftCard(msg) {
   const meta = msg.geneMetadata;
-  // Only show draft UI if the backend confirmed a draft was actually generated.
-  // unverified_gene_draft_available is now set AFTER the draft attempt, so it
-  // is true only when a real draft object exists.
-  // Suppress the draft card when the draft was already promoted to the main answer
-  // (draft_promoted_to_answer=true), which prevents rendering the same text twice.
-  if (!meta || meta.answer_tier !== 'tier2' || !meta.unverified_gene_draft_available || meta.draft_promoted_to_answer) return null;
+  // Only show the draft card when the backend confirmed a draft was generated
+  // (unverified_gene_draft_available=true, set after the actual attempt).
+  // Pending drafts are never promoted to the main answer (draft_promoted_to_answer
+  // is always false for pending drafts since Session 27.5), so no duplicate check
+  // is needed — the card and the main bubble always contain different text.
+  if (!meta || meta.answer_tier !== 'tier2' || !meta.unverified_gene_draft_available) return null;
 
   const card = document.createElement('div');
   card.className = 'unverified-draft-card';
@@ -557,8 +557,8 @@ function buildUnverifiedDraftCard(msg) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'unverified-draft-btn';
-    btn.textContent = 'הצג/י מידע לא מאומת';
-    btn.title = 'מידע שנוצר אוטומטית על ידי בינה מלאכותית — לא עבר בדיקה מקצועית';
+    btn.textContent = 'טיוטת AI לא מבוקרת';
+    btn.title = 'מידע שנוצר אוטומטית על ידי בינה מלאכותית — טרם נבדק על ידי הצוות הגנטי';
     btn.addEventListener('click', () => loadUnverifiedDraft(msg.id));
     card.appendChild(btn);
   } else if (msg.unverifiedDraftState === 'loading') {
@@ -571,12 +571,21 @@ function buildUnverifiedDraftCard(msg) {
       const d = msg.unverifiedDraft;
       const details = document.createElement('details');
       details.className = 'unverified-draft-details';
-      details.open = true;
+      // Collapsed by default — patient must actively expand.
+      details.open = false;
 
       const summary = document.createElement('summary');
       summary.className = 'unverified-draft-summary';
-      summary.textContent = 'מידע ניסיוני על הגן';
+      summary.textContent = 'טיוטת AI לא מבוקרת';
       details.appendChild(summary);
+
+      // Mandatory warning shown before every draft — must appear before the text.
+      const warning = document.createElement('p');
+      warning.className = 'unverified-draft-warning';
+      warning.textContent =
+        'מידע זה נוצר באמצעות AI וטרם נבדק או אושר על ידי הצוות הגנטי. ' +
+        'אין להסתמך עליו לצורך החלטות רפואיות אישיות.';
+      details.appendChild(warning);
 
       const badge = document.createElement('p');
       badge.className = 'ai-badge';

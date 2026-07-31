@@ -3454,19 +3454,26 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         except Exception:
             pass  # degraded silently — show fallback
 
-    # Function-first: when the draft passed validation, use its text as the main
-    # answer. The safety note is already embedded by the prompt ("המשמעות האישית...").
-    # The bland "found in ClinVar but no summary" message is the fallback only.
+    # Answer selection:
+    # - approved_only: use approved text if it exists, otherwise fallback (no pending draft).
+    # - immediate (default): a pending AI draft is NOT promoted into the main bubble;
+    #   the patient sees a short bridge message, and the draft is shown in a separate
+    #   collapsed card labelled "טיוטת AI לא מבוקרת".
     if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
         if _approved_db_draft:
-            # Use physician-approved text (may be physician-edited version)
             main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
         else:
-            # No approved draft yet — show the fallback, not the unverified draft
             main_answer = tier2_fallback_answer
-            draft_available = False  # suppress the unverified draft from the response
+            draft_available = False
     elif draft_available and unverified_draft:
-        main_answer = _correction_prefix_t2 + unverified_draft.get("text_he", tier2_fallback_answer)
+        # Bridge: honest, concise, does not falsely say "no information".
+        # Full draft text is in the collapsed card — not duplicated here.
+        main_answer = (
+            _correction_prefix_t2
+            + f"נמצא מידע נוסף על התפקיד הביולוגי של הגן {gene}. "
+            + "ניתן לפתוח את טיוטת ה-AI הלא מבוקרת המצורפת. "
+            + "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
+        )
     else:
         main_answer = tier2_fallback_answer
 
@@ -3489,9 +3496,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             "answer_tier": "tier2",
             "gene_knowledge_status": "unverified_available",
             "unverified_gene_draft_available": draft_available,
-            # When the AI draft is promoted to the main answer, the frontend must
-            # not also render the draft card — that would show the same text twice.
-            "draft_promoted_to_answer": draft_available,
+            # Pending drafts are never promoted into the main answer bubble.
+            # The draft is shown separately in a collapsed patient card.
+            "draft_promoted_to_answer": False,
             "ai_draft_attempted": _draft_debug.get("attempted", False),
             "ai_draft_generated": draft_available,
             "significance_breakdown": summary.get("by_significance") or {},

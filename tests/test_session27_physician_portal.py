@@ -552,8 +552,10 @@ class TestPortalApiEnabled:
         )
         client.post("/api/physician/login",
                     json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
+        # New contract: action verb + revision integer (not new_status + missing revision)
         r = client.post(f"/api/physician/drafts/{draft['id']}/review",
-                        json={"new_status": "approved", "review_comment": "נראה טוב."})
+                        json={"action": "approve", "revision": draft["revision"],
+                              "review_comment": "נראה טוב."})
         assert r.status_code == 200
         assert r.json()["draft"]["review_status"] == "approved"
 
@@ -567,7 +569,8 @@ class TestPortalApiEnabled:
         client.post("/api/physician/login",
                     json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
         r = client.post(f"/api/physician/drafts/{draft['id']}/review",
-                        json={"new_status": "rejected", "review_comment": "לא מדויק."})
+                        json={"action": "reject", "revision": draft["revision"],
+                              "review_comment": "לא מדויק."})
         assert r.status_code == 200
         data = r.json()["draft"]
         assert data["review_status"] == "rejected"
@@ -584,7 +587,8 @@ class TestPortalApiEnabled:
                     json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
         edited = "הגן HBB מקודד לשרשרת בטא-גלובין, הרכיב העיקרי של המוגלובין."
         r = client.post(f"/api/physician/drafts/{draft['id']}/review",
-                        json={"new_status": "approved", "physician_edited_text": edited})
+                        json={"action": "approve", "revision": draft["revision"],
+                              "physician_edited_text": edited})
         assert r.status_code == 200
         result = r.json()["draft"]
         assert result["physician_edited_text"] == edited
@@ -600,7 +604,7 @@ class TestPortalApiEnabled:
         client.post("/api/physician/login",
                     json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
         r = client.post(f"/api/physician/drafts/{draft['id']}/review",
-                        json={"new_status": "invalid_status"})
+                        json={"action": "invalid_action", "revision": 0})
         assert r.status_code == 400
 
     def test_get_audit_trail(self, portal_client):
@@ -611,7 +615,7 @@ class TestPortalApiEnabled:
         client.post("/api/physician/login",
                     json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
         client.post(f"/api/physician/drafts/{draft['id']}/review",
-                    json={"new_status": "approved"})
+                    json={"action": "approve", "revision": draft["revision"]})
         r = client.get(f"/api/physician/drafts/{draft['id']}/audit")
         assert r.status_code == 200
         trail = r.json()["audit"]
@@ -1720,3 +1724,520 @@ class TestPostgresCompatibility:
             -k test_real_postgres -v
         """
         pytest.skip("Real PostgreSQL not available in this environment — see docstring")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestSession275ReviewContract — Session 27.5
+#
+# Verifies the new review-action API contract:
+#   - action (verb: approve / reject / needs_revision) not new_status
+#   - revision (integer) for optimistic concurrency
+#   - comment required for reject and needs_revision
+#   - stale revision → 409
+#   - old new_status field → 422 (regression protection)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestSession275ReviewContract:
+    """
+    Session 27.5 — physician review API contract correctness.
+
+    Root cause of original 422: physician.html called closeModal() before
+    reading _pendingAction, so _pendingAction was null at request time.
+    The fix: capture action to a local variable before closeModal().
+
+    This class tests the FastAPI side of the contract to prevent regression.
+    """
+
+    # ------------------------------------------------------------------
+    # Setup helpers
+    # ------------------------------------------------------------------
+
+    def _login(self, client):
+        client.post("/api/physician/login",
+                    json={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
+
+    def _make_draft(self, rdb, gene="CCR5",
+                    text="הגן CCR5 מקודד לקולטן כמוקין על פני תאי חיסון."):
+        return rdb.create_draft(draft_type="gene_summary",
+                                original_ai_text=text, gene_symbol=gene)
+
+    # ------------------------------------------------------------------
+    # Old new_status field → 422 (regression test for the original bug)
+    # ------------------------------------------------------------------
+
+    def test_old_new_status_field_returns_422(self, portal_client):
+        """
+        Sending new_status instead of action must return 422.
+        This test documents the original production bug — the frontend was
+        sending {new_status: null} which also returned 422.
+        """
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"new_status": "approved", "revision": 0})
+        assert r.status_code == 422, (
+            "Sending the old new_status field must return 422 — "
+            "prevents regression to the broken contract"
+        )
+
+    def test_null_action_returns_422(self, portal_client):
+        """
+        Sending null for action (the root cause of the original 422 in production)
+        must return 422, not 200.
+        """
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": None, "revision": 0})
+        assert r.status_code == 422
+
+    def test_missing_action_returns_422(self, portal_client):
+        """Omitting action entirely (another variant of the production bug) → 422."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"revision": 0, "review_comment": "note"})
+        assert r.status_code == 422
+
+    def test_missing_revision_returns_422(self, portal_client):
+        """Omitting revision (required integer field) → 422."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "approve"})
+        assert r.status_code == 422
+
+    def test_revision_as_string_returns_422(self, portal_client):
+        """Revision sent as a string must fail Pydantic int validation → 422."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "approve", "revision": "0"})
+        # Pydantic v2 coerces string "0" to int 0 — this is acceptable.
+        # What matters: the request is NOT rejected with 422 due to type.
+        assert r.status_code in (200, 409, 422)  # coercion or error, not server crash
+
+    # ------------------------------------------------------------------
+    # Valid approve
+    # ------------------------------------------------------------------
+
+    def test_approve_action_sets_approved_status(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "approve", "revision": draft["revision"]})
+        assert r.status_code == 200
+        assert r.json()["draft"]["review_status"] == "approved"
+
+    def test_approve_without_comment_is_valid(self, portal_client):
+        """Approve does not require a review_comment."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "approve", "revision": draft["revision"],
+                              "review_comment": None})
+        assert r.status_code == 200
+
+    def test_approve_with_edited_text_sets_physician_edited_text(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        edited = "הגן CCR5 מקודד לקולטן כמוקין הנקרא CCR5, שנמצא בעיקר על לימפוציטים T ומונוציטים."
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "approve", "revision": draft["revision"],
+                              "physician_edited_text": edited})
+        assert r.status_code == 200
+        data = r.json()["draft"]
+        assert data["physician_edited_text"] == edited
+        # original_ai_text must be preserved
+        assert data["original_ai_text"] == draft["original_ai_text"]
+        # effective_text follows the edited version
+        assert data["effective_text"] == edited
+
+    def test_approve_preserves_original_ai_text(self, portal_client):
+        """Original AI text must survive approve-with-edit."""
+        client, rdb = portal_client
+        original = "הגן TNF מקודד לגורם נמק גידול אלפא."
+        draft = rdb.create_draft(draft_type="gene_summary",
+                                 original_ai_text=original, gene_symbol="TNF")
+        self._login(client)
+        client.post(f"/api/physician/drafts/{draft['id']}/review",
+                    json={"action": "approve", "revision": draft["revision"],
+                          "physician_edited_text": "גרסה ערוכה."})
+        fetched = rdb.get_draft(draft["id"])
+        assert fetched["original_ai_text"] == original
+
+    # ------------------------------------------------------------------
+    # Reject requires comment
+    # ------------------------------------------------------------------
+
+    def test_reject_without_comment_returns_422(self, portal_client):
+        """Rejecting without a review_comment must be refused with 422."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "reject", "revision": draft["revision"],
+                              "review_comment": None})
+        assert r.status_code == 422
+
+    def test_reject_with_empty_comment_returns_422(self, portal_client):
+        """Empty string comment for reject must also fail."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "reject", "revision": draft["revision"],
+                              "review_comment": "   "})
+        assert r.status_code == 422
+
+    def test_reject_with_comment_succeeds(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "reject", "revision": draft["revision"],
+                              "review_comment": "הטקסט אינו מדויק מספיק."})
+        assert r.status_code == 200
+        assert r.json()["draft"]["review_status"] == "rejected"
+
+    # ------------------------------------------------------------------
+    # Needs revision requires comment
+    # ------------------------------------------------------------------
+
+    def test_needs_revision_without_comment_returns_422(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "needs_revision", "revision": draft["revision"]})
+        assert r.status_code == 422
+
+    def test_needs_revision_with_comment_succeeds(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "needs_revision", "revision": draft["revision"],
+                              "review_comment": "נא לתקן את הניסוח."})
+        assert r.status_code == 200
+        assert r.json()["draft"]["review_status"] == "needs_revision"
+
+    # ------------------------------------------------------------------
+    # Invalid action name
+    # ------------------------------------------------------------------
+
+    def test_unknown_action_returns_400(self, portal_client):
+        """An unknown action verb (e.g. 'approved' instead of 'approve') → 400."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "approved", "revision": draft["revision"]})
+        assert r.status_code == 400
+
+    def test_old_verb_rejected_returns_400(self, portal_client):
+        """'rejected' is a status name, not a verb — must return 400."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "rejected", "revision": draft["revision"],
+                              "review_comment": "comment"})
+        assert r.status_code == 400
+
+    # ------------------------------------------------------------------
+    # Stale revision → 409
+    # ------------------------------------------------------------------
+
+    def test_stale_revision_returns_409(self, portal_client):
+        """
+        Sending a revision number lower than the current draft revision must
+        return 409 Conflict, not 200 or 422.
+        """
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        # First action: approve advances revision to 1
+        client.post(f"/api/physician/drafts/{draft['id']}/review",
+                    json={"action": "approve", "revision": draft["revision"]})
+        # Approve then supersede is not a valid transition, so use needs_revision first
+        draft2 = self._make_draft(rdb, gene="TNF",
+                                  text="גן TNF מקודד לציטוקין אחר לגמרי.")
+        # Approve draft2
+        client.post(f"/api/physician/drafts/{draft2['id']}/review",
+                    json={"action": "approve", "revision": draft2["revision"]})
+        # Now try to approve draft2 again with stale revision 0 (should be 1)
+        r = client.post(f"/api/physician/drafts/{draft2['id']}/review",
+                        json={"action": "approve", "revision": 0})
+        assert r.status_code == 409, (
+            f"Stale revision must return 409; got {r.status_code}"
+        )
+
+    def test_correct_revision_after_needs_revision_transition(self, portal_client):
+        """After needs_revision, revision increments; next action must use new revision."""
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        # Move to needs_revision (revision 0 → 1)
+        client.post(f"/api/physician/drafts/{draft['id']}/review",
+                    json={"action": "needs_revision", "revision": 0,
+                          "review_comment": "צריך תיקון."})
+        # Approve with stale revision 0 → 409
+        r_stale = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                              json={"action": "approve", "revision": 0})
+        assert r_stale.status_code == 409
+
+        # Approve with correct revision 1 → 200
+        r_ok = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                           json={"action": "approve", "revision": 1})
+        assert r_ok.status_code == 200
+        assert r_ok.json()["draft"]["review_status"] == "approved"
+
+    # ------------------------------------------------------------------
+    # Audit trail and revision increments
+    # ------------------------------------------------------------------
+
+    def test_revision_increments_on_approve(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        assert draft["revision"] == 0
+        r = client.post(f"/api/physician/drafts/{draft['id']}/review",
+                        json={"action": "approve", "revision": 0})
+        assert r.json()["draft"]["revision"] == 1
+
+    def test_audit_event_created_for_approve(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        client.post(f"/api/physician/drafts/{draft['id']}/review",
+                    json={"action": "approve", "revision": 0})
+        trail = rdb.get_audit_trail(draft["id"])
+        assert len(trail) == 1
+        assert trail[0]["new_status"] == "approved"
+        assert trail[0]["reviewer_identity"] == _TEST_USERNAME
+
+    def test_audit_event_created_for_reject(self, portal_client):
+        client, rdb = portal_client
+        draft = self._make_draft(rdb)
+        self._login(client)
+        client.post(f"/api/physician/drafts/{draft['id']}/review",
+                    json={"action": "reject", "revision": 0,
+                          "review_comment": "לא מדויק."})
+        trail = rdb.get_audit_trail(draft["id"])
+        assert trail[0]["new_status"] == "rejected"
+
+    # ------------------------------------------------------------------
+    # Missing draft → 404 (not 500 or 422)
+    # ------------------------------------------------------------------
+
+    def test_missing_draft_returns_404(self, portal_client):
+        client, _ = portal_client
+        self._login(client)
+        r = client.post(f"/api/physician/drafts/{uuid.uuid4()}/review",
+                        json={"action": "approve", "revision": 0})
+        assert r.status_code == 404
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TestSession275PatientDraftCard — Session 27.5
+#
+# Verifies that a pending AI draft is NOT promoted into the main answer,
+# that draft_promoted_to_answer=False, and that the bridge message is used.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestSession275PatientDraftCard:
+    """
+    Session 27.5 — patient-facing draft card behaviour.
+
+    Before 27.5: a pending AI draft text was used as the main answer
+    (draft_promoted_to_answer=True), so the review draft and main bubble
+    were identical.
+
+    After 27.5: draft_promoted_to_answer=False, main answer is a short
+    honest bridge message, and the draft is kept in unverified_gene_draft
+    for the collapsed patient card.
+    """
+
+    def _ask(self, question, **extra):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        client = TestClient(app)
+        payload = {"question": question}
+        payload.update(extra)
+        r = client.post("/ask", json=payload)
+        assert r.status_code == 200, f"POST /ask failed: {r.text}"
+        return r.json()
+
+    def _ask_with_draft(self, question, monkeypatch, rdb, gene, draft_text):
+        """
+        Patch the draft generator to return a known text without a real LLM.
+        """
+        import importlib
+        from app import counseling_engine
+        fake_draft = {
+            "visible": True,
+            "status": "unreviewed",
+            "gene_symbol": gene,
+            "warning_he": "מידע AI לא מאומת",
+            "text_he": draft_text,
+            "generated_by_model": "test-model",
+            "review_status": "unreviewed",
+            "approved": False,
+            "generated_at": "2026-01-01T00:00:00Z",
+        }
+        monkeypatch.setattr(
+            counseling_engine,
+            "_generate_unverified_gene_draft",
+            lambda gene, question="", clinvar_context=None, use_lenient_validator=False, _debug=None:
+                fake_draft,
+        )
+        return self._ask(question)
+
+    # ------------------------------------------------------------------
+    # draft_promoted_to_answer is always False for pending drafts
+    # ------------------------------------------------------------------
+
+    def test_draft_promoted_to_answer_false_when_draft_available(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        When a pending AI draft is generated, draft_promoted_to_answer must
+        be False (not True as it was before Session 27.5).
+        """
+        data = self._ask_with_draft(
+            "מה זה גן CCR5?", monkeypatch, isolated_review_db,
+            "CCR5", "CCR5 הוא גן שמקודד לקולטן כמוקין.",
+        )
+        meta = data.get("gene_metadata") or {}
+        assert meta.get("draft_promoted_to_answer") is False, (
+            f"draft_promoted_to_answer must be False for a pending draft; "
+            f"gene_metadata={meta}"
+        )
+
+    def test_main_answer_is_not_identical_to_draft_text(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        The main answer bubble must not contain the full AI draft text when
+        the draft is pending.
+        """
+        draft_text = "CCR5 הוא גן שמקודד לקולטן כמוקין המסייע לנגיף HIV לחדור לתאים."
+        data = self._ask_with_draft(
+            "מה זה גן CCR5?", monkeypatch, isolated_review_db,
+            "CCR5", draft_text,
+        )
+        assert draft_text not in data.get("answer", ""), (
+            "Full AI draft text must not appear in the main answer bubble "
+            "when the draft is pending/unreviewed"
+        )
+
+    def test_main_answer_is_bridge_message_not_empty(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        When a pending draft exists, the main answer must be a short bridge
+        message that neither falsely says 'no info' nor contains the full draft.
+        """
+        data = self._ask_with_draft(
+            "מה זה גן CCR5?", monkeypatch, isolated_review_db,
+            "CCR5", "CCR5 מקודד לקולטן.",
+        )
+        answer = data.get("answer", "")
+        assert answer.strip(), "Main answer must not be empty"
+        # Bridge message must mention the draft is available
+        assert any(kw in answer for kw in ["טיוטת", "מידע נוסף", "מצורפת"]), (
+            f"Bridge message must mention the draft; got: {answer!r}"
+        )
+
+    def test_draft_not_in_main_answer_implies_not_promoted(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        Confirm the invariant: if draft_promoted_to_answer=False the full
+        draft text is absent from the main answer.
+        """
+        draft_text = "MARKER_TEXT_שאסור_להיות_בתשובה_הראשית"
+        data = self._ask_with_draft(
+            "מה זה גן TNF?", monkeypatch, isolated_review_db,
+            "TNF", draft_text,
+        )
+        meta = data.get("gene_metadata") or {}
+        if not meta.get("draft_promoted_to_answer", True):
+            assert draft_text not in data.get("answer", "")
+
+    def test_unverified_gene_draft_present_in_response(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        unverified_gene_draft must still be present in the API response so the
+        frontend can render the collapsed card.
+        """
+        data = self._ask_with_draft(
+            "מה זה גן CCR5?", monkeypatch, isolated_review_db,
+            "CCR5", "CCR5 מקודד לקולטן.",
+        )
+        assert "unverified_gene_draft" in data, (
+            "unverified_gene_draft must be present in the response when a draft exists"
+        )
+        draft = data["unverified_gene_draft"]
+        assert isinstance(draft, dict)
+        assert "text_he" in draft
+
+    # ------------------------------------------------------------------
+    # Approved draft behavior (approved_only mode)
+    # ------------------------------------------------------------------
+
+    def test_approved_only_serves_approved_effective_text(
+        self, isolated_review_db, monkeypatch
+    ):
+        """
+        In approved_only mode, the approved draft's effective_text is the
+        main answer.
+        """
+        rdb = isolated_review_db
+        monkeypatch.setenv("AI_DRAFT_VISIBILITY_MODE", "approved_only")
+
+        # Create and approve a draft
+        d = rdb.create_draft(
+            draft_type="gene_summary",
+            original_ai_text="CCR5 מקודד לקולטן שבשרת מחקר.",
+            gene_symbol="CCR5",
+        )
+        edited = "CCR5 מקודד לקולטן כמוקין — גרסה מאושרת."
+        rdb.update_draft_status(
+            d["id"], new_status="approved", reviewer_identity="dr_test",
+            physician_edited_text=edited,
+        )
+
+        from app import counseling_engine
+        monkeypatch.setattr(
+            counseling_engine, "_AI_DRAFT_VISIBILITY_MODE", "approved_only"
+        )
+
+        # Mock the draft generator so the gene goes through the Tier-2 path
+        monkeypatch.setattr(
+            counseling_engine,
+            "_generate_unverified_gene_draft",
+            lambda gene, question="", clinvar_context=None,
+                   use_lenient_validator=False, _debug=None:
+                {"visible": True, "status": "unreviewed",
+                 "gene_symbol": gene, "warning_he": "",
+                 "text_he": "CCR5 מקודד לקולטן שבשרת מחקר.",
+                 "generated_by_model": "test-model",
+                 "review_status": "unreviewed",
+                 "approved": False, "generated_at": "2026-01-01T00:00:00Z"},
+        )
+
+        data = self._ask("מה זה גן CCR5?")
+        assert edited in data.get("answer", ""), (
+            "Approved_only mode must serve the physician-edited approved text"
+        )

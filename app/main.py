@@ -1852,10 +1852,31 @@ async def physician_get_audit(draft_id: str, request: Request):
     return {"draft_id": draft_id, "audit": audit}
 
 
+# Maps the short action verb used by the frontend to the full status stored in DB.
+# Using a verb ("approve") rather than a past-tense status ("approved") makes the
+# API intent unambiguous and prevents the frontend null-after-closeModal bug.
+_REVIEW_ACTION_TO_STATUS: dict = {
+    "approve": "approved",
+    "reject": "rejected",
+    "needs_revision": "needs_revision",
+}
+
+# Actions that require a non-empty review_comment.
+_REVIEW_ACTIONS_REQUIRE_COMMENT = frozenset({"reject", "needs_revision"})
+
+
 class PhysicianReviewRequest(BaseModel):
-    new_status: str = Field(..., description="approved | rejected | needs_revision")
-    review_comment: Optional[str] = Field(None, max_length=1000)
+    action: str = Field(
+        ...,
+        description="approve | reject | needs_revision",
+    )
+    revision: int = Field(
+        ...,
+        ge=0,
+        description="Current revision number of the draft (optimistic-concurrency check)",
+    )
     physician_edited_text: Optional[str] = Field(None, max_length=20000)
+    review_comment: Optional[str] = Field(None, max_length=1000)
 
 
 @app.post("/api/physician/drafts/{draft_id}/review", include_in_schema=False)
@@ -1867,13 +1888,37 @@ async def physician_review_draft(
     _portal_gate()
     identity = _physician_auth.require_physician(request)
 
-    if body.new_status not in _review_db.VALID_STATUSES:
-        raise HTTPException(status_code=400, detail=f"Invalid status: {body.new_status!r}")
+    # Validate action
+    if body.action not in _REVIEW_ACTION_TO_STATUS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"פעולה לא חוקית: {body.action!r}. הערכים המותרים: approve, reject, needs_revision",
+        )
+    new_status = _REVIEW_ACTION_TO_STATUS[body.action]
+
+    # Require non-empty comment for rejection and revision requests
+    if body.action in _REVIEW_ACTIONS_REQUIRE_COMMENT:
+        comment_text = (body.review_comment or "").strip()
+        if not comment_text:
+            raise HTTPException(
+                status_code=422,
+                detail="דחייה ובקשת תיקון מחייבות הערה. אנא הוסף הסבר קצר.",
+            )
+
+    # Stale-revision guard: reject if the draft was already updated by another action
+    existing = _review_db.get_draft(draft_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="הטיוטה לא נמצאה.")
+    if existing["revision"] != body.revision:
+        raise HTTPException(
+            status_code=409,
+            detail="הטיוטה עודכנה על ידי אחר מאז נטענה. אנא רענן את הדף.",
+        )
 
     try:
         updated = _review_db.update_draft_status(
             draft_id,
-            new_status=body.new_status,
+            new_status=new_status,
             reviewer_identity=identity,
             review_comment=body.review_comment,
             physician_edited_text=body.physician_edited_text,
@@ -1882,10 +1927,10 @@ async def physician_review_draft(
         raise HTTPException(status_code=400, detail=str(exc))
 
     if updated is None:
-        raise HTTPException(status_code=500, detail="Review action failed on the server.")
+        raise HTTPException(status_code=500, detail="פעולת הסקירה נכשלה בשרת.")
 
     logger.info(
-        "Physician %s set draft %s → %s",
-        identity, draft_id[:8], body.new_status,
+        "Physician %s: draft %s → %s",
+        identity, draft_id[:8], new_status,
     )
     return {"ok": True, "draft": updated}
