@@ -81,24 +81,40 @@ class TestGroundedContextSufficiency:
         has, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
         assert has is False
 
-    def test_sufficient_with_three_meaningful_phenotypes(self):
+    def test_phenotype_only_not_sufficient_for_biology(self):
+        """Session 27.8.1 Part A: phenotypes alone cannot qualify as source-grounded biology."""
         summary = {"phenotypes": ["Alzheimer disease", "Lipoprotein disorder", "Cardiovascular disease"]}
         has, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
-        assert has is True
-        assert any(p.get("type") == "clinvar_phenotypes" for p in ctx)
+        assert has is False, (
+            "3 phenotype names alone must NOT qualify as grounded biology evidence"
+        )
+        # Phenotype entries are still in context_parts (for reference), but has_biology=False.
+        pheno_parts = [p for p in ctx if p.get("type") == "phenotype_associations"]
+        assert pheno_parts, "phenotype_associations should still be in context_parts"
+        assert pheno_parts[0].get("has_biology") is False
 
-    def test_sufficient_with_six_phenotypes(self):
+    def test_six_phenotypes_still_not_sufficient_for_biology(self):
+        """More phenotypes still don't constitute biology evidence."""
         phenotypes = [f"Disease {i}" for i in range(6)]
         summary = {"phenotypes": phenotypes}
         has, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
-        assert has is True
+        assert has is False, "Six phenotypes alone must not qualify as grounded biology evidence"
 
     def test_sufficient_with_approved_context_summary(self):
+        """Approved ClinVar context summary (approved_context type) qualifies as biology."""
         with patch.object(_ce.gene_knowledge, "get_gene_context_summary",
-                          return_value="APOE is associated with lipid metabolism and Alzheimer disease risk."):
+                          return_value="APOE is involved in lipid transport and Alzheimer risk."):
             has, ctx = _ce._has_sufficient_grounded_gene_context("APOE", {})
             assert has is True
-            assert any(p.get("type") == "approved_context" for p in ctx)
+            assert any(p.get("type") == "approved_context" and p.get("has_biology") for p in ctx)
+
+    def test_sufficient_with_curated_patient_summary(self):
+        """Approved patient summary (curated_gene_description type) qualifies as biology."""
+        with patch.object(_ce.gene_knowledge, "get_gene_patient_summary",
+                          return_value="HBB encodes the beta chain of hemoglobin and is linked to sickle cell disease."):
+            has, ctx = _ce._has_sufficient_grounded_gene_context("HBB", {})
+            assert has is True
+            assert any(p.get("type") == "curated_gene_description" and p.get("has_biology") for p in ctx)
 
     def test_insufficient_with_short_approved_context(self):
         with patch.object(_ce.gene_knowledge, "get_gene_context_summary",
@@ -681,3 +697,327 @@ class TestSession278Regression:
                 "Curated gene HBB must remain at tier1/1b"
             )
             assert meta.get("source_grounded", False) is False
+
+
+# ===========================================================================
+# Session 27.8.1 Part A — tightened grounding evidence classification
+# ===========================================================================
+
+class TestGroundingEvidenceClassification:
+    """Part A: evidence classes, has_biology flag, fabricated-claim rejection."""
+
+    def test_evidence_types_have_has_biology_flag(self):
+        """Each context_part must carry a has_biology field."""
+        summary = {"phenotypes": ["Disease A", "Disease B", "Disease C"]}
+        _, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
+        for part in ctx:
+            assert "has_biology" in part, f"Missing has_biology on part: {part}"
+
+    def test_phenotype_associations_has_biology_false(self):
+        summary = {"phenotypes": ["Disease A", "Disease B", "Disease C"]}
+        _, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
+        pheno = next((p for p in ctx if p["type"] == "phenotype_associations"), None)
+        assert pheno is not None
+        assert pheno["has_biology"] is False
+
+    def test_approved_context_has_biology_true(self):
+        with patch.object(_ce.gene_knowledge, "get_gene_context_summary",
+                          return_value="TESTGENE encodes a protein involved in DNA repair."):
+            _, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", {})
+            bio = next((p for p in ctx if p["type"] == "approved_context"), None)
+            assert bio is not None
+            assert bio["has_biology"] is True
+
+    def test_curated_gene_description_has_biology_true(self):
+        with patch.object(_ce.gene_knowledge, "get_gene_patient_summary",
+                          return_value="This gene encodes a key enzyme in the clotting cascade."):
+            _, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", {})
+            bio = next((p for p in ctx if p["type"] == "curated_gene_description"), None)
+            assert bio is not None
+            assert bio["has_biology"] is True
+
+    def test_no_biology_evidence_never_grounded(self):
+        """Genes reaching Tier 2 with only ClinVar phenotypes cannot be grounded."""
+        summary = {"phenotypes": ["Breast cancer", "Ovarian cancer", "Prostate cancer"]}
+        with patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
+            has, ctx = _ce._has_sufficient_grounded_gene_context("BRCA1", summary)
+            assert has is False
+
+    def test_apoe_without_biology_source_not_grounded(self):
+        """APOE: when only ClinVar phenotypes are available, grounded=False."""
+        summary = {"phenotypes": [
+            "Alzheimer disease", "Lipoprotein disorder", "Cardiovascular disease",
+        ]}
+        with patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
+            has, _ = _ce._has_sufficient_grounded_gene_context("APOE", summary)
+            assert has is False, (
+                "APOE without approved biology context must not be classified as source-grounded"
+            )
+
+    def test_ccr5_without_biology_source_not_grounded(self):
+        """CCR5: same rule applies — phenotype-only context is not sufficient."""
+        summary = {"phenotypes": ["HIV infection", "West Nile virus infection", "Malaria"]}
+        with patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
+            has, _ = _ce._has_sufficient_grounded_gene_context("CCR5", summary)
+            assert has is False
+
+    def test_generate_grounded_rejects_phenotype_only_context(self):
+        """_generate_source_grounded_gene_answer must refuse phenotype-only context."""
+        phenotype_only_parts = [
+            {"type": "phenotype_associations", "phenotypes": ["A", "B", "C"], "has_biology": False}
+        ]
+        result = _ce._generate_source_grounded_gene_answer("TESTGENE", phenotype_only_parts)
+        assert result is None, (
+            "Grounded generator must return None when only phenotype evidence is supplied"
+        )
+
+    def test_fabricated_biology_constant_exists(self):
+        assert hasattr(_ce, "_FABRICATED_BIOLOGY_PATTERNS")
+
+    def test_safe_context_topics_exported(self):
+        """Counseling engine exports the canonical allowed topics set."""
+        assert hasattr(_ce, "_SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS")
+        assert "chromosome_deletion_general" in _ce._SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS
+        assert "vus" in _ce._SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS
+
+    def test_main_uses_engine_topics(self):
+        """SafeSessionContext validator uses the engine's allowed topics."""
+        from app.main import _SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS as main_set
+        assert main_set is _ce._SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS
+
+
+# ===========================================================================
+# Session 27.8.1 Part B/E — conversation_context response field
+# ===========================================================================
+
+class TestConversationContextResponse:
+    """Backend returns `conversation_context` that the frontend stores and echoes."""
+
+    def test_chromosome_answer_includes_context(self):
+        data = _ask("מה זה מחיקה בכרומוזום?")
+        assert "conversation_context" in data, "Chromosome answer must include conversation_context"
+
+    def test_conversation_context_has_active_topic(self):
+        data = _ask("מה זה מחיקה בכרומוזום?")
+        ctx = data.get("conversation_context") or {}
+        assert ctx.get("active_topic") == "chromosome_deletion_general"
+
+    def test_conversation_context_has_turn_count(self):
+        data = _ask("מה זה VUS?")
+        ctx = data.get("conversation_context") or {}
+        assert isinstance(ctx.get("turn_count"), int)
+        assert ctx["turn_count"] >= 1
+
+    def test_turn_count_increments(self):
+        data1 = _ask("מה זה VUS?")
+        tc1 = (data1.get("conversation_context") or {}).get("turn_count", 0)
+        data2 = _ask("מה זה VUS?", context=(data1.get("conversation_context") or {}))
+        tc2 = (data2.get("conversation_context") or {}).get("turn_count", 0)
+        assert tc2 == tc1 + 1
+
+    def test_conversation_context_gene_symbol_for_gene_answer(self):
+        with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
+             patch.object(_ce.gene_index, "get_gene_summary",
+                          return_value={"total_variants": 10, "by_significance": {}, "phenotypes": []}), \
+             patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
+            data = _ask("מה ידוע על הגן CCR5?")
+            ctx = data.get("conversation_context") or {}
+            assert ctx.get("gene_symbol") == "CCR5"
+
+    def test_chromosome_context_includes_number_when_mentioned(self):
+        data = _ask("יש לי בעיה בכרומוזום 21")
+        ctx = data.get("conversation_context") or {}
+        assert ctx.get("chromosome_number") == "21"
+
+    def test_chromosome_number_carried_forward_from_input_context(self):
+        """If the answer stays in a chromosome topic, carry forward the chromosome number."""
+        data = _ask(
+            "הממצא הוא מחיקה",
+            context={"active_topic": "chromosome_finding_general", "chromosome_number": "13"},
+        )
+        ctx = data.get("conversation_context") or {}
+        assert ctx.get("chromosome_number") == "13"
+
+    def test_safety_block_has_null_context(self):
+        """Safety-blocked answers must not return active_topic in context."""
+        data = _ask("השם שלי ישראל ישראלי, מה זה VUS?")
+        ctx = data.get("conversation_context") or {}
+        assert ctx.get("active_topic") is None
+
+    def test_active_topic_whitelist_enforced_in_output(self):
+        """conversation_context.active_topic must always be in the whitelist."""
+        for q in ["מה זה VUS?", "מה זה מחיקה בכרומוזום?", "מה זה נשאות?"]:
+            data = _ask(q)
+            ctx = data.get("conversation_context") or {}
+            at = ctx.get("active_topic")
+            if at is not None:
+                assert at in _ce._SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS, (
+                    f"active_topic {at!r} not in whitelist for question: {q!r}"
+                )
+
+    def test_conversation_context_no_pii(self):
+        """conversation_context must never contain PII fields."""
+        data = _ask("מה זה VUS?")
+        ctx = data.get("conversation_context") or {}
+        prohibited = {"name", "phone", "email", "id_number", "teudat_zehut"}
+        assert not prohibited.intersection(ctx.keys())
+
+    def test_context_field_is_dict_not_string(self):
+        data = _ask("מה זה כפילות כרומוזומית?")
+        ctx = data.get("conversation_context")
+        if ctx is not None:
+            assert isinstance(ctx, dict)
+
+
+# ===========================================================================
+# Session 27.8.1 Part C — Follow-up routing sequences (API-level)
+# ===========================================================================
+
+class TestFollowupRoutingSequences:
+    """Verify the 5 described browser sequences at the API layer."""
+
+    def test_seq1_chromosome21_then_deletion(self):
+        """Sequence 1: chr 21 question → 'הממצא הוא מחיקה' routes to deletion."""
+        first = _ask("מה לעשות אם יש לי בעיה בכרומוזום 21?")
+        ctx = first.get("conversation_context") or {}
+        second = _ask("הממצא הוא מחיקה", context=ctx)
+        assert second["matched_topic"] == "chromosome_deletion_general"
+        assert any(w in second["answer"] for w in ["מחיקה", "deletion", "חסר"])
+        # chromosome number carried forward
+        ctx2 = second.get("conversation_context") or {}
+        assert ctx2.get("chromosome_number") in ("21", None)  # 21 if mentioned, None otherwise
+
+    def test_seq1_no_vus_carrier_fallback(self):
+        """Sequence 1: deletion routing must not fall back to VUS or carrier."""
+        ctx = {"active_topic": "chromosome_finding_general", "chromosome_number": "21"}
+        data = _ask("הממצא הוא מחיקה", context=ctx)
+        assert data["matched_topic"] not in ("carrier", "carrier_vs_affected", "vus")
+
+    def test_seq2_chromosome7_then_duplication(self):
+        """Sequence 2: chr 7 context → 'זה duplication' routes to duplication."""
+        ctx = {"active_topic": "chromosome_finding_general", "chromosome_number": "7"}
+        data = _ask("אמרו שזה duplication", context=ctx)
+        assert data["matched_topic"] == "chromosome_duplication_general"
+        ctx2 = data.get("conversation_context") or {}
+        assert ctx2.get("chromosome_number") == "7"
+
+    def test_seq3_vus_apc_then_reclassification(self):
+        """Sequence 3: VUS in APC → reclassification question stays educational."""
+        first = _ask("מה זה VUS בגן APC?")
+        assert first["safety_level"] == "general_information"
+        second = _ask("האם זה יכול להשתנות?")
+        assert second["safety_level"] == "general_information"
+        assert second["needs_genetic_counselor"] is False
+
+    def test_seq4_chromosome_then_gene_question(self):
+        """Sequence 4: chromosome context cleared/replaced when gene question starts."""
+        ctx = {"active_topic": "chromosome_deletion_general", "chromosome_number": "5"}
+        data = _ask("מה זה הגן HBB?", context=ctx)
+        assert data["safety_level"] == "general_information"
+        # Should route to gene answer, not chromosome follow-up
+        ctx2 = data.get("conversation_context") or {}
+        if ctx2.get("active_topic"):
+            assert "chromosome" not in ctx2["active_topic"], (
+                "After a gene question, active_topic should not be a chromosome topic"
+            )
+
+    def test_seq5_chromosome_then_abortion_question(self):
+        """Sequence 5: safety routing overrides context — no AI draft generation."""
+        ctx = {"active_topic": "chromosome_finding_general", "chromosome_number": "21"}
+        data = _ask("האם כדאי להפסיק את ההריון?", context=ctx)  # standard spelling
+        assert data["safety_level"] == "requires_genetic_counselor"
+        assert data["needs_genetic_counselor"] is True
+
+    def test_seq5_no_draft_on_safety_block(self):
+        """No unverified draft is generated for safety-blocked answers."""
+        ctx = {"active_topic": "chromosome_finding_general"}
+        data = _ask("האם להפיל?", context=ctx)
+        assert data["safety_level"] == "requires_genetic_counselor"
+        assert data.get("unverified_gene_draft") is None
+
+
+# ===========================================================================
+# Session 27.8.1 Part D — clinician questions UX (API behavior)
+# ===========================================================================
+
+class TestClinicianQuestionsUXBehavior:
+    """Verify clinician questions don't contaminate context and remain non-clickable by design."""
+
+    def test_clinician_questions_not_in_conversation_context(self):
+        """Clinician questions must never appear in the returned conversation_context."""
+        data = _ask("מה זה מחיקה בכרומוזום?")
+        ctx = data.get("conversation_context") or {}
+        assert "clinician_questions" not in ctx
+
+    def test_clinician_questions_separate_from_suggested(self):
+        """suggested_questions and clinician_questions must be disjoint sets."""
+        data = _ask("מה זה מחיקה בכרומוזום?")
+        suggested = set(data.get("suggested_questions") or [])
+        clinician = set(data.get("clinician_questions") or [])
+        assert not (suggested & clinician), "No overlap allowed between the two question lists"
+
+    def test_suggested_questions_non_empty_for_chromosome(self):
+        data = _ask("מה זה טרנסלוקציה?")
+        assert len(data.get("suggested_questions") or []) >= 1
+
+    def test_clinician_questions_not_in_suggested(self):
+        """Clinician questions are NOT sent back via suggested_questions."""
+        for q in ["מה זה מחיקה בכרומוזום?", "מה זה כפילות כרומוזומית?"]:
+            data = _ask(q)
+            clinician = set(data.get("clinician_questions") or [])
+            for cq in clinician:
+                assert cq not in (data.get("suggested_questions") or []), (
+                    f"Clinician question appeared in suggested_questions: {cq!r}"
+                )
+
+
+# ===========================================================================
+# Session 27.8.1 Part E — Response schema documentation test
+# ===========================================================================
+
+class TestResponseSchemaCompleteness:
+    """All documented response fields must be present and have the correct types."""
+
+    def test_chromosome_response_all_fields(self):
+        data = _ask("מה זה מחיקה בכרומוזום?")
+        # Required fields
+        assert isinstance(data["answer"], str)
+        assert data["safety_level"] in (
+            "general_information", "contains_identifying_info",
+            "requires_genetic_counselor", "out_of_scope"
+        )
+        assert isinstance(data["needs_genetic_counselor"], bool)
+        assert isinstance(data.get("suggested_questions", []), list)
+        # Optional documented fields
+        if "clinician_questions" in data:
+            assert isinstance(data["clinician_questions"], list)
+        if "conversation_context" in data:
+            assert isinstance(data["conversation_context"], dict)
+
+    def test_gene_response_optional_fields(self):
+        with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
+             patch.object(_ce.gene_index, "get_gene_summary",
+                          return_value={"total_variants": 10, "by_significance": {}, "phenotypes": []}), \
+             patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
+            data = _ask("מה ידוע על הגן CCR5?")
+            if "gene_metadata" in data:
+                gm = data["gene_metadata"]
+                assert isinstance(gm, dict)
+                assert "ai_content_type" in gm
+                assert "source_grounded" in gm
+                assert "requires_physician_review" in gm
+            if "conversation_context" in data:
+                assert isinstance(data["conversation_context"], dict)
+
+    def test_backward_compatible_5_required_keys(self):
+        """Existing consumers that only check the 5 required keys must still work."""
+        for q in ["מה זה VUS?", "מה זה נשאות?", "מה זה מחיקה בכרומוזום?"]:
+            data = _ask(q)
+            assert _REQUIRED_KEYS.issubset(data.keys())

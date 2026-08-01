@@ -1621,6 +1621,32 @@ _CHROMOSOME_TOPIC_INTENTS: frozenset = frozenset({
     "aneuploidy_general",
 })
 
+# Whitelisted active topics for SafeSessionContext.
+# This is the single canonical source — main.py imports it so the two sets
+# cannot drift apart.  _build_session_context_out() uses it to whitelist
+# the topics it writes into session_context_out.
+_SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS: frozenset = frozenset({
+    # Chromosome education sub-intents
+    "chromosome_finding_general", "chromosome_deletion_general",
+    "chromosome_duplication_general", "translocation_general",
+    "mosaicism_general", "cytogenetic_test_general", "aneuploidy_general",
+    # Chromosome special cases
+    "trisomy21_education", "extra_chromosome_education", "chromosomal_finding",
+    # Gene answers
+    "gene_clinvar_summary", "gene_info",
+    # VUS variants
+    "vus", "vus_known_gene", "vus_general",
+    # Carrier status
+    "carrier", "carrier_vs_affected", "carrier_general",
+    # Inheritance patterns
+    "inheritance", "inheritance_general",
+    "autosomal_dominant", "autosomal_recessive", "x_linked",
+    # Testing and family
+    "genetic_test_general", "family_testing",
+    # Specific variant educational answer
+    "specific_variant",
+})
+
 # Short keywords that map a brief follow-up message to a chromosome sub-intent.
 _CHROMOSOME_FOLLOWUP_PATTERNS: list = [
     ("chromosome_deletion_general",    ["מחיקה", "deletion", "חסר", "חסרה"]),
@@ -1913,16 +1939,29 @@ You are a genetic counseling educational assistant. Write 2-3 patient-friendly H
 sentences summarizing the following structured information about gene {gene}.
 
 MANDATORY RULES — violating any rule causes your response to be discarded:
-1. Use ONLY information present in the supplied context below. Never invent biology.
-2. Do NOT add disease mechanisms, molecular pathways, or protein functions not in context.
-3. Do NOT give risk estimates, prognosis, treatment, or surveillance recommendations.
-4. Do NOT use personal pronouns directed at the patient (e.g. 'שלך', 'שלכם').
-5. End with one sentence directing the patient to consult their genetics team.
-6. Maximum 100 words. Write in Hebrew only.
-7. If the context is insufficient for a meaningful patient-facing answer, respond: INSUFFICIENT_CONTEXT
+1. Use ONLY information present in the supplied context below.
+   Do NOT use your own knowledge of the gene, even if you have it.
+   Do NOT add disease mechanisms, molecular pathways, protein functions,
+   receptor roles, enzyme activity, or metabolic pathways unless they
+   appear word-for-word in the supplied context.
+2. Do NOT give risk estimates, prognosis, treatment, or surveillance recommendations.
+3. Do NOT use personal pronouns directed at the patient (e.g. 'שלך', 'שלכם').
+4. End with one sentence directing the patient to consult their genetics team.
+5. Maximum 100 words. Write in Hebrew only.
+6. If the context is insufficient for a meaningful patient-facing answer,
+   respond with the single word: INSUFFICIENT_CONTEXT
 
 Supplied context for gene {gene}:
 {context}"""
+
+# Terms that indicate the LLM fabricated biological mechanism beyond supplied facts.
+# Used to validate grounded output when context contains no molecular biology.
+_FABRICATED_BIOLOGY_PATTERNS = re.compile(
+    r"(?:מסלול מולקולרי|נתיב ביוכימי|חילוף חומרים של שומנים|ליפופרוטאין|"
+    r"ריצפטור ל|קולטן ל|אנזים ה|פעילות אנזימטית|מנגנון ביולוגי|"
+    r"ביטוי גנים|קינאז|פרוטאז|טרנספורמינג|פקטור גדילה)",
+    re.IGNORECASE,
+)
 
 
 def _has_sufficient_grounded_gene_context(
@@ -1930,23 +1969,50 @@ def _has_sufficient_grounded_gene_context(
     clinvar_summary: "Optional[dict]",
 ) -> "tuple[bool, list]":
     """
-    Return (has_sufficient, context_parts) for source-grounded gene phrasing.
+    Return (has_biology_evidence, context_parts) for source-grounded gene phrasing.
 
-    Sufficient context requires either:
-      - A physician-approved ClinVar context summary (get_gene_context_summary), or
-      - At least 3 non-trivial ClinVar phenotype associations.
+    Session 27.8.1 Part A tightened rules:
+    SOURCE_GROUNDED_PHRASING requires EXPLICIT biology evidence in the supplied
+    context.  Phenotype associations and ClinVar counts alone cannot support
+    biological-role claims and are therefore NOT sufficient for grounded classification.
 
-    ClinVar variant counts alone (without phenotypes) are NOT sufficient —
-    they cannot support meaningful biological claims about the gene.
+    Evidence classes:
+      curated_gene_description  — physician-approved patient summary; has_biology=True
+      approved_context          — physician-approved ClinVar context summary; has_biology=True
+      phenotype_associations    — ClinVar phenotype names; has_biology=False
+                                  (may support association wording only, not mechanisms)
+      clinvar_counts            — variant counts; has_biology=False; never sufficient
+
+    The function returns True only when at least one biology part is present.
+    ClinVar phenotypes are included in context_parts for reference/debugging but
+    do NOT set the True return value.
     """
     context_parts: list = []
 
-    # 1. Physician-approved ClinVar context summary (strongest grounding).
+    # 1. Physician-approved patient summary — explicit curated gene biology.
+    #    Note: genes with this summary are normally served in Tier 1b before reaching
+    #    Tier 2, so this will only apply in unusual cases (e.g. index-available but
+    #    gene_cards missing, with an approved gene_knowledge record).
+    gk_patient = gene_knowledge.get_gene_patient_summary(gene)
+    if gk_patient and len(gk_patient.strip()) > 30:
+        context_parts.append({
+            "type": "curated_gene_description",
+            "text": gk_patient.strip(),
+            "has_biology": True,
+        })
+
+    # 2. Physician-approved ClinVar context summary — approved context.
     gk_context = gene_knowledge.get_gene_context_summary(gene)
     if gk_context and len(gk_context.strip()) > 30:
-        context_parts.append({"type": "approved_context", "text": gk_context.strip()})
+        context_parts.append({
+            "type": "approved_context",
+            "text": gk_context.strip(),
+            "has_biology": True,
+        })
 
-    # 2. ClinVar phenotypes — factual associations only; require ≥3 non-trivial.
+    # 3. ClinVar phenotypes — association evidence only; NEVER qualifies as biology.
+    #    Included in context_parts for reference; has_biology=False so the caller
+    #    knows no biology claims are allowed.
     if clinvar_summary:
         _TRIVIAL = frozenset({
             "not specified", "not provided", "see cases", "not applicable",
@@ -1957,9 +2023,16 @@ def _has_sufficient_grounded_gene_context(
             if p and p.strip().lower() not in _TRIVIAL and len(p.strip()) > 5
         ]
         if len(phenotypes) >= 3:
-            context_parts.append({"type": "clinvar_phenotypes", "phenotypes": phenotypes[:6]})
+            context_parts.append({
+                "type": "phenotype_associations",
+                "phenotypes": phenotypes[:6],
+                "has_biology": False,
+            })
 
-    return len(context_parts) > 0, context_parts
+    # Sufficient for SOURCE_GROUNDED_PHRASING only when at least one biology part
+    # is present.  Phenotype-only context → returns False.
+    has_biology = any(p.get("has_biology") for p in context_parts)
+    return has_biology, context_parts
 
 
 def _generate_source_grounded_gene_answer(
@@ -1981,12 +2054,24 @@ def _generate_source_grounded_gene_answer(
         if isinstance(_debug, dict):
             _debug.update(kw)
 
+    # Validate: only proceed when biology evidence is present.
+    # phenotype_associations alone (has_biology=False) must never reach here
+    # because _has_sufficient_grounded_gene_context() should have returned False.
+    has_biology = any(p.get("has_biology") for p in context_parts)
+    if not has_biology:
+        _dbg(attempted=False, reason="no_biology_evidence")
+        return None
+
     context_lines: list = []
     for part in context_parts:
         ptype = part.get("type")
-        if ptype == "approved_context":
+        if ptype == "curated_gene_description":
+            context_lines.append(f"Approved gene description: {part['text']}")
+        elif ptype == "approved_context":
             context_lines.append(f"Physician-approved context: {part['text']}")
-        elif ptype == "clinvar_phenotypes":
+        elif ptype == "phenotype_associations":
+            # Association evidence — still supplied so the LLM can reference
+            # disease names, but molecular claims are forbidden by the prompt.
             phenotypes = part.get("phenotypes", [])
             context_lines.append(f"ClinVar reported associations: {', '.join(phenotypes)}")
 
@@ -2029,6 +2114,18 @@ def _generate_source_grounded_gene_answer(
         if sum(1 for c in text if "א" <= c <= "ת") < 20:
             _dbg(generated=False, reason="insufficient_hebrew")
             return None
+        # Detect fabricated biological mechanism claims not present in supplied context.
+        # If the output contains molecular/pathway terms that don't appear in the
+        # supplied context, reject it — the LLM has added knowledge beyond the context.
+        context_text_lower = context_text.lower()
+        if _FABRICATED_BIOLOGY_PATTERNS.search(text):
+            found_terms = _FABRICATED_BIOLOGY_PATTERNS.findall(text)
+            unsupported = [t for t in found_terms
+                           if t.lower() not in context_text_lower]
+            if unsupported:
+                _dbg(generated=False, reason="fabricated_biology_detected",
+                     unsupported_terms=unsupported)
+                return None
         _dbg(generated=True)
         return text
     except Exception as exc:
@@ -4837,7 +4934,7 @@ def classify_question_intent(
 # Public API
 # ---------------------------------------------------------------------------
 
-def answer_question(
+def _answer_question_impl(
     question: str,
     topic: Optional[str] = None,
     conversation_context: Optional[list] = None,
@@ -5103,5 +5200,83 @@ def answer_question(
         "fallback_used": True,
         "llm_mode": "none",
     }
+
+
+# ---------------------------------------------------------------------------
+# Session context output (Session 27.8.1 Part B/E)
+# ---------------------------------------------------------------------------
+
+def _build_session_context_out(
+    result: dict,
+    question: str,
+    session_context: "Optional[dict]",
+) -> dict:
+    """
+    Build the next-turn safe session context from the current answer.
+
+    The returned dict is sent back to the frontend as `conversation_context`
+    in the response.  The frontend stores it and sends it as `context` on the
+    next request.
+
+    Only whitelisted topic values are included.  Never contains PII, HGVS/ISCN
+    notation, raw answer text, or medical free text.
+    """
+    matched = result.get("matched_topic")
+    prev_turn = int((session_context or {}).get("turn_count") or 0)
+    ctx_out: dict = {"turn_count": min(prev_turn + 1, 200)}
+
+    # Active topic — whitelist-validated.
+    if matched and matched in _SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS:
+        ctx_out["active_topic"] = matched
+
+    # Chromosome number — from chromosome answer metadata or carried forward.
+    chr_meta = result.get("chromosome_draft_metadata") or {}
+    chr_num = chr_meta.get("chromosome_number_detected")
+    if chr_num:
+        ctx_out["chromosome_number"] = chr_num
+    elif matched in _CHROMOSOME_TOPIC_INTENTS and session_context:
+        prev_chr = session_context.get("chromosome_number")
+        if prev_chr:
+            ctx_out["chromosome_number"] = prev_chr
+
+    # Normalized sub-intent from chromosome follow-up.
+    sub_intent = chr_meta.get("sub_intent")
+    if sub_intent and sub_intent in _SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS:
+        ctx_out["normalized_intent"] = sub_intent
+
+    # Gene symbol from gene metadata — alphanumeric only.
+    gene_meta = result.get("gene_metadata") or {}
+    gene_sym = gene_meta.get("gene_symbol")
+    if gene_sym and re.match(r"^[A-Za-z0-9]{1,20}$", gene_sym):
+        ctx_out["gene_symbol"] = gene_sym.upper()
+
+    return ctx_out
+
+
+def answer_question(
+    question: str,
+    topic: Optional[str] = None,
+    conversation_context: Optional[list] = None,
+    last_topic: Optional[str] = None,
+    include_unverified_gene_draft: bool = False,
+    session_context: Optional[dict] = None,
+) -> dict:
+    """
+    Public entry point for POST /ask.  Delegates to _answer_question_impl()
+    and appends session_context_out for the frontend to store and echo back.
+    """
+    result = _answer_question_impl(
+        question=question,
+        topic=topic,
+        conversation_context=conversation_context,
+        last_topic=last_topic,
+        include_unverified_gene_draft=include_unverified_gene_draft,
+        session_context=session_context,
+    )
+    result["session_context_out"] = _build_session_context_out(
+        result, (question or "").strip(), session_context
+    )
+    return result
+
 
 # # gene card LLM framing removed

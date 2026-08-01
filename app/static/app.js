@@ -8,17 +8,13 @@ let messages = [];
 let isSending = false;
 let lastTopic = null;
 
-const CONTEXT_WINDOW = 6;
+// Session 27.8.1 Part B: safe session context received from the backend.
+// Sent back on every subsequent POST /ask as the `context` field.
+// Cleared when the user starts a new chat.
+// Never contains PII, HGVS/ISCN, raw answer text, or full conversation history.
+let sessionCtx = null;
 
-// ── Safe session context builder (Session 27.8 Part E) ────────────────────────
-function buildSafeSessionContext() {
-  const lastBot = [...messages].reverse().find((m) => m.role === 'bot' && !m.isWelcome);
-  if (!lastBot || !lastBot.matchedTopic) return null;
-  const ctx = { active_topic: lastBot.matchedTopic };
-  if (lastBot.chromosomeNumber) ctx.chromosome_number = lastBot.chromosomeNumber;
-  if (lastBot.normalizedIntent) ctx.normalized_intent = lastBot.normalizedIntent;
-  return ctx;
-}
+const CONTEXT_WINDOW = 6;
 
 // ── Demo questions (shown in the demo strip) ─────────────────────────────────
 const DEMO_QUESTIONS = [
@@ -135,6 +131,7 @@ function renderDemoStrip() {
 function clearConversation() {
   messages = [];
   lastTopic = null;
+  sessionCtx = null;  // clear stored backend context (Part B)
   byId('demo-strip').hidden = false;
   hideErrorBanner();
   renderMessages();
@@ -177,7 +174,6 @@ async function sendQuestion(question, topic) {
   const pendingId = addMessage('bot-pending', PENDING_TEXT_HE);
 
   try {
-    const safeCtx = buildSafeSessionContext();
     const resp = await fetch('/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -186,7 +182,7 @@ async function sendQuestion(question, topic) {
         topic: topic || undefined,
         conversation_context: conversationContext.length ? conversationContext : undefined,
         last_topic: lastTopicForThisTurn || undefined,
-        context: safeCtx || undefined,
+        context: sessionCtx || undefined,  // backend-issued context (Part B)
       }),
     });
 
@@ -239,6 +235,16 @@ async function sendQuestion(question, topic) {
       }
     }
     lastTopic = data.matched_topic || lastTopic;
+    // Store the backend-issued safe context for the next request (Part B).
+    // The backend validates and whitelists all fields; we store as-is.
+    // When the topic changes (e.g. chromosome → gene), the backend returns
+    // a fresh context replacing the old one — no client-side topic tracking needed.
+    if (data.conversation_context && typeof data.conversation_context === 'object') {
+      sessionCtx = data.conversation_context;
+    } else {
+      // No context returned (e.g. privacy block, out-of-scope) → clear.
+      sessionCtx = null;
+    }
   } catch (err) {
     const msg = 'לא ניתן היה להתחבר לשרת. בדקי את החיבור לאינטרנט ונסי שוב.';
     replaceMessage(pendingId, 'bot', msg, 'out_of_scope', [], null, null, false, true);

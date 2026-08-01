@@ -34,6 +34,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from app import retriever, responder, policy, session_store, kb, counseling_engine, gene_index
+from app.counseling_engine import _SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS as _CE_SAFE_TOPICS
 from app import review_db as _review_db
 from app import physician_auth as _physician_auth
 from app import health as _health_module
@@ -239,16 +240,9 @@ class ConversationContextMessage(BaseModel):
 # ---------------------------------------------------------------------------
 # Safe session context (Session 27.8 Part D/E)
 # ---------------------------------------------------------------------------
-
-_SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS: frozenset = frozenset({
-    "chromosome_finding_general", "chromosome_deletion_general",
-    "chromosome_duplication_general", "translocation_general",
-    "mosaicism_general", "cytogenetic_test_general", "aneuploidy_general",
-    "gene_clinvar_summary", "vus", "vus_known_gene", "vus_general",
-    "carrier", "carrier_vs_affected", "carrier_general",
-    "trisomy21_education", "extra_chromosome_education", "chromosomal_finding",
-    "gene_info", "inheritance", "genetic_test_general", "specific_variant",
-})
+# _CE_SAFE_TOPICS is imported from counseling_engine — single source of truth.
+# Use it for the SafeSessionContext active_topic validator below.
+_SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS = _CE_SAFE_TOPICS
 
 
 class SafeSessionContext(BaseModel):
@@ -450,6 +444,17 @@ class CounselingAskResponse(BaseModel):
             "Present for chromosome education answers; absent for other answer types."
         ),
     )
+    conversation_context: Optional[dict] = Field(
+        None,
+        description=(
+            "Safe structured context for the next request. "
+            "The frontend stores this and sends it back as 'context' on the next turn. "
+            "Contains only whitelisted fields: active_topic, chromosome_number, "
+            "gene_symbol, normalized_intent, turn_count. "
+            "Never contains PII, HGVS/ISCN notation, or raw answer text. "
+            "Session 27.8.1 Part B/E."
+        ),
+    )
 
     @model_serializer
     def _serialize(self) -> dict:
@@ -494,6 +499,8 @@ class CounselingAskResponse(BaseModel):
             out["unverified_chromosome_draft"] = self.unverified_chromosome_draft
         if self.clinician_questions is not None:
             out["clinician_questions"] = self.clinician_questions[:5]
+        if self.conversation_context is not None:
+            out["conversation_context"] = self.conversation_context
         return out
 
 
@@ -633,6 +640,8 @@ def ask(request: CounselingAskRequest):
         session_context=safe_ctx,
         # last_gene_symbol is intentionally not passed — context bleed prevention.
     )
+    # Session 27.8.1 Part B/E: include safe session context in response.
+    result.setdefault("conversation_context", result.pop("session_context_out", None))
     return CounselingAskResponse(**result)
 
 
