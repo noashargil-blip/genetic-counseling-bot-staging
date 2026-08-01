@@ -1332,6 +1332,238 @@ def _build_extra_chromosome_answer() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# General chromosomal / cytogenetic education
+# (Does NOT overlap with trisomy21 or extra_chromosome handlers above;
+#  those fire first in classify_question_intent.)
+# ---------------------------------------------------------------------------
+
+# Patterns for each sub-intent.  They fire only when the more-specific
+# trisomy21 and extra_chromosome detectors have already returned False.
+
+_CHROMOSOME_DELETION_RE = re.compile(
+    r"מחיקה\s+בכרומוזום|מחיקה\s+כרומוזומית"
+    r"|chromosomal\s+deletion|deletion.*chromosome"
+    r"|חסר\s+בכרומוזום|קטע\s+חסר.*כרומוזום",
+    re.IGNORECASE,
+)
+
+_CHROMOSOME_DUPLICATION_RE = re.compile(
+    r"כפילות\s+בכרומוזום|כפילות\s+כרומוזומית"
+    r"|chromosomal\s+duplication|duplication.*chromosome"
+    r"|קטע\s+כפול.*כרומוזום",
+    re.IGNORECASE,
+)
+
+_TRANSLOCATION_RE = re.compile(
+    r"טרנסלוקציה|translocation|translocat"
+    r"|העברה\s+(?:בין\s+)?כרומוזום",
+    re.IGNORECASE,
+)
+
+_MOSAICISM_GENERAL_RE = re.compile(
+    r"(?:מוזאיצ|מוזאיק|מוזאיקה|פסיפס)\b"
+    r"|mosaicism|mosaic",
+    re.IGNORECASE,
+)
+
+_CYTOGENETIC_TEST_RE = re.compile(
+    r"קריוטיפ|karyotype|karyotyp"
+    r"|מיקרואריי|microarray|array\s*CGH|chromosomal\s*microarray|\bCMA\b"
+    r"|\bFISH\b|fluorescence\s+in\s+situ"
+    r"|בדיקת\s+כרומוזומים",
+    re.IGNORECASE,
+)
+
+_ANEUPLOIDY_GENERAL_RE = re.compile(
+    r"אנאופלואידיה|aneuploidy|aneuploid"
+    r"|מונוזומי[הא]|monosomy"
+    r"|טריזומי[הא]\s+\d",   # "טריזומיה N" — trisomy 21 already handled before this
+    re.IGNORECASE,
+)
+
+_CHROMOSOME_FINDING_GENERAL_RE = re.compile(
+    # "בעיה בכרומוזום X" / "ממצא כרומוזומי" / "שינוי בכרומוזום"
+    r"בעיה\s+בכרומוזום"
+    r"|ממצא(?:ים?)?\s+כרומוזומי"
+    r"|שינוי\s+בכרומוזום"
+    r"|חריגה\s+בכרומוזום"
+    r"|כרומוזום.*(?:בעיה|ממצא|שינוי)"
+    r"|ניתוח\s+כרומוזומי",   # "chromosomal analysis" but not karyotype specifically
+    re.IGNORECASE,
+)
+
+_CYTOGENETIC_KB: dict = {
+    "chromosome_finding_general": {
+        "answer_he": (
+            "כשמדברים על \"בעיה בכרומוזום\", הכוונה יכולה להיות לסוגים שונים של ממצאים:\n\n"
+            "• שינוי במספר הכרומוזומים — כרומוזום עודף (טריזומיה) או חסר (מונוזומיה).\n"
+            "• שינוי במבנה הכרומוזום — מחיקה (חסרה של קטע), כפילות (הכפלה של קטע), "
+            "או טרנסלוקציה (קטע שעבר מכרומוזום אחד לאחר).\n"
+            "• ממצא פסיפס (מוזאיקה) — שינוי קיים רק בחלק מהתאים.\n\n"
+            "המשמעות תלויה לחלוטין בסוג הממצא המדויק ובמיקומו. "
+            "לא ניתן לקבוע את המשמעות הקלינית רק לפי ה\"כרומוזום\" שצוין — נדרש פירוט מלא של הדוח. "
+            "הצוות הגנטי שבדק אתכם הוא הגורם המתאים להסביר את המשמעות הספציפית של הממצא."
+        ),
+        "suggested_questions": [
+            "מה סוג הממצא שנמצא בכרומוזום — עודף, חסר, מחיקה או שינוי מבני אחר?",
+            "האם הממצא קיים בכל התאים או רק בחלקם?",
+            "מה המשמעות הקלינית של הממצא הספציפי הזה?",
+        ],
+    },
+    "chromosome_deletion_general": {
+        "answer_he": (
+            "מחיקה כרומוזומית היא מצב שבו קטע של כרומוזום חסר. "
+            "המחיקה יכולה להיות קטנה (מיקרו-מחיקה, הנראית לעיתים רק במיקרואריי) "
+            "או גדולה יותר (נראית בקריוטיפ).\n\n"
+            "ההשפעה הקלינית תלויה בגודל המחיקה ובמיקומה — אילו גנים כלולים בקטע החסר. "
+            "מחיקות קטנות בגנים לא-קריטיים עלולות להיות חסרות משמעות קלינית, "
+            "בעוד שמחיקות גדולות יותר או במיקומים רגישים עשויות להיות קשורות לתסמינים שונים.\n\n"
+            "הצוות הגנטי שטיפל בכם יסביר את המשמעות של המחיקה הספציפית שנמצאה."
+        ),
+        "suggested_questions": [
+            "מה המיקום המדויק של המחיקה (כרומוזום ואזור)?",
+            "האם המחיקה כוללת גנים ידועים?",
+            "האם ניתן לבדוק אם המחיקה נמצאת גם אצל ההורים?",
+        ],
+    },
+    "chromosome_duplication_general": {
+        "answer_he": (
+            "כפילות כרומוזומית היא מצב שבו קטע של כרומוזום מופיע בעותק נוסף. "
+            "בניגוד למחיקה (חסר), בכפילות יש חומר גנטי עודף.\n\n"
+            "ההשפעה הקלינית תלויה בגודל הכפילות, במיקומה ובגנים שהיא כוללת. "
+            "כפילות קטנות יכולות לעיתים להיות ניטרליות; כפילות גדולות יותר עשויות להיות "
+            "קשורות לביטויים שונים בהתאם לאזור הכרומוזום המדובר.\n\n"
+            "הצוות הגנטי שטיפל בכם יסביר את המשמעות של הכפילות הספציפית שנמצאה."
+        ),
+        "suggested_questions": [
+            "מה המיקום המדויק של הכפילות?",
+            "האם הכפילות כוללת גנים ידועים?",
+            "מה ידוע על ממצאים דומים במאגרים הגנטיים?",
+        ],
+    },
+    "translocation_general": {
+        "answer_he": (
+            "טרנסלוקציה היא שינוי מבני שבו קטע כרומוזומי עבר ממקומו המקורי לכרומוזום אחר.\n\n"
+            "קיימים שני סוגים עיקריים:\n"
+            "• טרנסלוקציה מאוזנת — החומר הגנטי עבר מקומו אך לא חסר ולא עודף. "
+            "נשאים של טרנסלוקציה מאוזנת לרוב בריאים, אך עשויים להיות בסיכון מוגבר לבעיות בפריון "
+            "או להעביר טרנסלוקציה לא מאוזנת לצאצאים.\n"
+            "• טרנסלוקציה לא מאוזנת — יש חסר או עודף של חומר גנטי. "
+            "סוג זה עשוי להיות קשור לביטויים קליניים, תלוי בגנים המעורבים.\n\n"
+            "הצוות הגנטי יפרט אם הטרנסלוקציה שנמצאה מאוזנת או לא, ומה המשמעות הספציפית."
+        ),
+        "suggested_questions": [
+            "האם הטרנסלוקציה מאוזנת או לא מאוזנת?",
+            "אילו כרומוזומים מעורבים ואיפה הנקודות?",
+            "האם כדאי לבדוק את שאר בני המשפחה?",
+        ],
+    },
+    "mosaicism_general": {
+        "answer_he": (
+            "פסיפס (מוזאיקה) הוא מצב שבו אדם מכיל שתי אוכלוסיות תאים לפחות, "
+            "בעלות הרכב כרומוזומי שונה. לדוגמה, חלק מהתאים עשויים להכיל את המספר הרגיל "
+            "של כרומוזומים, בעוד שתאים אחרים מכילים כרומוזום עודף או חסר.\n\n"
+            "ההשפעה הקלינית תלויה בשניים:\n"
+            "• אחוז התאים הנגועים (\"אחוז המוזאיקה\").\n"
+            "• אילו רקמות ואיברים מכילים את התאים המשתנים.\n\n"
+            "פסיפס יכול לגרום לביטוי קל יותר בהשוואה לאותה הפרעה במצב מלא, "
+            "או לכלל ללא ביטוי קליני — אך זה משתנה מאוד מאדם לאדם ומממצא לממצא.\n\n"
+            "הצוות הגנטי יסביר את אחוז הפסיפס שנמצא ואת המשמעות הספציפית."
+        ),
+        "suggested_questions": [
+            "מה אחוז התאים עם הממצא הכרומוזומי?",
+            "באילו רקמות בוצעה הבדיקה?",
+            "מה ידוע על ביטוי קליני בדרגת פסיפס דומה?",
+        ],
+    },
+    "cytogenetic_test_general": {
+        "answer_he": (
+            "ישנן כמה בדיקות מרכזיות לניתוח כרומוזומים:\n\n"
+            "• קריוטיפ (Karyotype) — מסדר את כל הכרומוזומים ומאפשר לזהות שינויים גדולים "
+            "במספרם (למשל טריזומיה) או במבנם (כמו טרנסלוקציות גדולות). "
+            "רזולוציה: ~5-10 מיליון בסיסים.\n"
+            "• מיקרואריי כרומוזומלי (Chromosomal Microarray / CMA) — מזהה "
+            "מחיקות וכפילויות קטנות שאינן נראות בקריוטיפ. רזולוציה גבוהה הרבה יותר.\n"
+            "• FISH — בדיקה ממוקדת לאזור כרומוזומי ספציפי.\n\n"
+            "הבדיקה שנבחרה לכם מותאמת לשאלה הקלינית הספציפית. "
+            "הצוות הגנטי יסביר מה הבדיקה שבוצעה, ומה הממצא אומר בהקשר שלכם."
+        ),
+        "suggested_questions": [
+            "איזו בדיקת כרומוזומים בוצעה — קריוטיפ, מיקרואריי, או אחר?",
+            "מה הרזולוציה של הבדיקה שנעשתה?",
+            "האם יש צורך בבדיקה נוספת כדי לאשש את הממצא?",
+        ],
+    },
+    "aneuploidy_general": {
+        "answer_he": (
+            "אנאופלואידיה פירושה שמספר הכרומוזומים בתא שונה מהמספר הצפוי (46 בבני אדם). "
+            "קיימות שתי צורות עיקריות:\n\n"
+            "• טריזומיה — כרומוזום עודף (47 כרומוזומים). "
+            "דוגמאות: טריזומיה 21 (תסמונת דאון), טריזומיה 18 (תסמונת אדוורדס), טריזומיה 13.\n"
+            "• מונוזומיה — כרומוזום חסר (45 כרומוזומים). "
+            "הדוגמה הנפוצה ביותר: מונוזומיה X (תסמונת טרנר).\n\n"
+            "המשמעות הקלינית שונה מאוד בין כרומוזומים שונים ובין מצבים שונים. "
+            "הצוות הגנטי יפרט את הממצא הספציפי ואת המשמעות הרלוונטית לכם."
+        ),
+        "suggested_questions": [
+            "איזה כרומוזום מעורב ומה הממצא המדויק?",
+            "האם הממצא נמצא בכל התאים או רק בחלקם (פסיפס)?",
+            "מה המשמעות הקלינית של הממצא הספציפי הזה?",
+        ],
+    },
+}
+
+_CHROMOSOME_EDUCATION_SUGGESTED_QUESTIONS_DEFAULT = [
+    "מה סוג הממצא שנמצא בכרומוזום?",
+    "מה המשמעות הקלינית של הממצא הספציפי הזה?",
+    "מה כדאי לשאול את הצוות הגנטי לאחר בדיקת כרומוזומים?",
+]
+
+
+def _detect_chromosome_education(text: str) -> Optional[str]:
+    """
+    Return a chromosomal-education sub-intent string, or None.
+
+    Only called AFTER _detect_trisomy21 and _detect_extra_chromosome have
+    returned False, so we do not need to guard against those overlaps here.
+    """
+    if _TRANSLOCATION_RE.search(text):
+        return "translocation_general"
+    if _CHROMOSOME_DELETION_RE.search(text):
+        return "chromosome_deletion_general"
+    if _CHROMOSOME_DUPLICATION_RE.search(text):
+        return "chromosome_duplication_general"
+    if _MOSAICISM_GENERAL_RE.search(text):
+        return "mosaicism_general"
+    if _CYTOGENETIC_TEST_RE.search(text):
+        return "cytogenetic_test_general"
+    if _ANEUPLOIDY_GENERAL_RE.search(text):
+        return "aneuploidy_general"
+    if _CHROMOSOME_FINDING_GENERAL_RE.search(text):
+        return "chromosome_finding_general"
+    return None
+
+
+def _build_chromosome_education_answer(question: str, sub_intent: str) -> dict:
+    """
+    Return a general chromosomal/cytogenetic educational answer.
+    Never assumes a specific diagnosis; always defers to the genetics team.
+    """
+    kb_entry = _CYTOGENETIC_KB.get(sub_intent) or _CYTOGENETIC_KB["chromosome_finding_general"]
+    answer_text = kb_entry["answer_he"]
+    suggested = kb_entry.get("suggested_questions", _CHROMOSOME_EDUCATION_SUGGESTED_QUESTIONS_DEFAULT)
+    return {
+        "answer": answer_text,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": sub_intent,
+        "suggested_questions": list(suggested),
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Out-of-domain detection — clearly non-genetics/medicine questions
 # ---------------------------------------------------------------------------
 
@@ -3464,47 +3696,46 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     )
     draft_available = unverified_draft is not None
 
-    # Visibility mode: "approved_only" suppresses unreviewed drafts from patients.
-    # Instead, look for a physician-approved draft in the review DB.
+    # Session 27.7 Part B: look for a physician-approved draft in ALL visibility
+    # modes.  Approved (physician-vetted) content fills the curated-content gap
+    # regardless of whether pending/unreviewed drafts are shown.
     _approved_db_draft = None
-    if _AI_DRAFT_VISIBILITY_MODE == "approved_only" and draft_available:
-        try:
-            from app import review_db as _rdb
-            _approved_db_draft = _rdb.get_approved_draft(gene, draft_type="gene_summary")
-        except Exception:
-            pass  # degraded silently — show fallback
+    try:
+        from app import review_db as _rdb
+        _approved_db_draft = _rdb.get_approved_draft(gene, draft_type="gene_summary")
+    except Exception:
+        pass  # degraded silently — show fallback
 
-    # Answer selection:
-    # - approved_only: use approved text if it exists, otherwise fallback (no pending draft).
-    # Answer selection — main_answer and draft generation are fully independent:
-    #
-    # approved_only: if a physician has approved a draft, serve that text.
-    #   Otherwise show the fallback and suppress the unverified draft entirely.
-    # immediate (default): always serve the deterministic fallback.
-    #   A pending AI draft is NEVER used as the main answer; it goes only into
-    #   the supplemental card.  This means answer is identical whether or not
-    #   draft generation succeeded — the two pipelines cannot interfere.
-    if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
-        if _approved_db_draft:
-            main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
-        else:
-            main_answer = tier2_fallback_answer
+    # Answer selection — priority: approved > fallback.
+    # PENDING drafts NEVER become the main answer (Session 27.6.1 invariant).
+    if _approved_db_draft:
+        # Physician-vetted content fills the tier-2 gap in both modes.
+        main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
+        _draft_promoted = True
+        if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+            # approved_only: suppress the pending card entirely (approved IS the answer)
             draft_available = False
-    else:
-        # immediate mode: always the deterministic fallback
+    elif _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+        # No approved draft, approved-only mode: fallback + suppress pending card.
         main_answer = tier2_fallback_answer
+        _draft_promoted = False
+        draft_available = False
+    else:
+        # immediate mode, no approved draft: deterministic fallback.
+        # Pending draft may appear as supplemental card below.
+        main_answer = tier2_fallback_answer
+        _draft_promoted = False
 
-    # draft_promoted_to_answer: True only when an approved draft text was used
-    # as the main answer (approved_only mode + approved draft present).
-    _draft_promoted = _AI_DRAFT_VISIBILITY_MODE == "approved_only" and bool(_approved_db_draft)
-
-    # Duplication control — show the supplemental card only when it adds content
-    # not already in the main answer, and only in immediate mode (in approved_only
-    # mode pending drafts are never shown to the patient).
+    # Supplemental card visibility.
+    # Show only when: immediate mode, no approved draft used, draft adds new content.
     _draft_text_he = (unverified_draft or {}).get("text_he", "")
-    if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+    if _draft_promoted:
+        # Approved text is already the main answer — no need for a second card.
         draft_displayable = False
-        _draft_hidden_reason: "Optional[str]" = "approved_only_mode" if draft_available else "no_draft"
+        _draft_hidden_reason: "Optional[str]" = "approved_text_is_main_answer"
+    elif _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+        draft_displayable = False
+        _draft_hidden_reason = "approved_only_mode" if draft_available else "no_draft"
     else:
         draft_displayable = (
             draft_available
@@ -3533,14 +3764,12 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
             "total_variants": summary.get("total_variants"),
             "found_in_index": True,
             "answer_tier": "tier2",
-            "gene_knowledge_status": "unverified_available",
+            "gene_knowledge_status": "approved" if _draft_promoted else "unverified_available",
             "unverified_gene_draft_available": draft_available,
             # True only when the draft adds content not already in the main answer.
             "unverified_gene_draft_displayable": draft_displayable,
             "draft_hidden_reason": _draft_hidden_reason,
-            # True only when an approved draft text is the main answer
-            # (approved_only mode + approved draft present).
-            # Always False for pending/unreviewed drafts in immediate mode.
+            # True when a physician-approved draft text is the main answer.
             "draft_promoted_to_answer": _draft_promoted,
             "ai_draft_attempted": _draft_debug.get("attempted", False),
             "ai_draft_generated": draft_available,
@@ -4033,6 +4262,15 @@ def classify_question_intent(
         return {"intent": "trisomy21_education", "gene_symbol": None,
                 "reason": "trisomy21_signals_in_text"}
 
+    # B.7. General chromosomal / cytogenetic question (ambiguous chromosome finding,
+    #   deletion, duplication, translocation, mosaicism, karyotype, microarray, aneuploidy).
+    #   Fires after the more-specific trisomy21 / extra_chromosome steps above.
+    _chr_sub_intent = _detect_chromosome_education(text)
+    if _chr_sub_intent:
+        return {"intent": "chromosome_education", "gene_symbol": None,
+                "reason": "chromosome_education_detected",
+                "sub_intent": _chr_sub_intent}
+
     # C. Specific named variant (HGVS / rsID) — evidence summary, not refused
     if safety.contains_specific_variant(text):
         return {"intent": "specific_variant", "gene_symbol": None,
@@ -4161,6 +4399,12 @@ def answer_question(
     # B.5. Trisomy 21 / Down syndrome educational answer.
     if intent == "trisomy21_education":
         return _build_trisomy21_answer()
+
+    # B.7. General chromosomal / cytogenetic educational answer.
+    if intent == "chromosome_education":
+        return _build_chromosome_education_answer(
+            text, intent_info.get("sub_intent", "chromosome_finding_general")
+        )
 
     # C. Specific named variant (HGVS / rsID) — educational evidence summary,
     #    not refused outright; runs before personal-interpretation check.
