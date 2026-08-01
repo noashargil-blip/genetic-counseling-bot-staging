@@ -1544,23 +1544,226 @@ def _detect_chromosome_education(text: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Chromosome education AI draft — safety guard, generation, and lifecycle
+# ---------------------------------------------------------------------------
+
+# ISCN notation: specific cytogenetic coordinates / report strings that indicate
+# the patient is describing a specific report rather than asking a general question.
+# Draft generation is suppressed when these are detected.
+_ISCN_RE = re.compile(
+    # karyotype formula: "46,XX" / "47,XY" / "45,X0"
+    r"\b(?:4[2-9]|5[0-5])\s*,\s*(?:XX|XY|X0|XYY|XXY|XO)\b"
+    # structural abnormality notation
+    r"|del\s*\(\d+\)\s*\("
+    r"|dup\s*\(\d+\)\s*\("
+    r"|inv\s*\(\d+\)\s*\("
+    # translocation t(N;M)
+    r"|\bt\s*\(\s*\d+\s*;\s*\d+\s*\)"
+    # mosaic karyotype
+    r"|mos\s+\d+\s*,\s*(?:XX|XY)",
+    re.IGNORECASE,
+)
+
+# Personal interpretation or prognosis phrases that must suppress draft generation.
+_CHROMOSOME_PERSONAL_SIGNALS = [
+    "הסיכון שלי", "מה הסיכוי שלי", "מה ה outcome שלי",
+    "מה הפרוגנוזה שלי", "האם אצטרך", "מה קורה לי",
+    "מה ה פרוגנוזה", "מה יקרה לי",
+]
+
+
+def _is_safe_for_chromosome_draft(text: str) -> bool:
+    """
+    Return False when the question must NOT trigger chromosome AI draft generation:
+    ISCN notation, personal interpretation signals, or PII.
+    (Safety routing already blocks termination decisions upstream, but
+    this is an extra guard specifically for draft generation.)
+    """
+    if _ISCN_RE.search(text):
+        return False
+    lower = text.lower()
+    if any(sig in lower for sig in _CHROMOSOME_PERSONAL_SIGNALS):
+        return False
+    return True
+
+
+_CHROMOSOME_EDUCATION_DRAFT_SYSTEM_PROMPT = """You are a genetic counseling educational assistant. Generate a short Hebrew educational expansion about a chromosomal finding concept for a patient who has already met with a genetic counselor.
+
+MANDATORY RULES — never violate:
+- Write ONLY general education about the chromosomal concept. Never diagnose.
+- Do NOT assume which specific syndrome the patient has (e.g., "chromosome 21 problem" ≠ trisomy 21).
+- Do NOT recommend surgery, treatment, surveillance, or termination.
+- Do NOT give personal risk estimates or prognosis.
+- Do NOT interpret ISCN strings, specific reports, or coordinate notation.
+- Write in Hebrew. Maximum 3 short paragraphs.
+- End by suggesting the patient consult their genetics team for specific meaning.
+- If you cannot generate safe content, respond with: NO_SAFE_CONTENT"""
+
+_CHROMOSOME_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT = (
+    _CHROMOSOME_EDUCATION_DRAFT_SYSTEM_PROMPT
+    + "\n\nIMPORTANT: Previous attempt was rejected. "
+    "Ensure the response contains ONLY general educational text in Hebrew. "
+    "Do NOT include any personal interpretation, specific syndrome names as conclusions, or medical advice."
+)
+
+
+def _generate_chromosome_education_draft(
+    question: str,
+    sub_intent: str,
+    _debug: "Optional[dict]" = None,
+) -> "Optional[dict]":
+    """
+    Generate an optional AI educational expansion for a chromosomal concept.
+
+    The deterministic KB answer is ALWAYS the main answer — this draft is
+    supplemental only (never replaces the KB text).
+
+    Returns a dict with text_he or None. Never raises.
+    """
+    from datetime import datetime, timezone
+
+    def _dbg(**kw: object) -> None:
+        if isinstance(_debug, dict):
+            _debug.update(kw)
+
+    try:
+        client = create_llm_client()
+    except ValueError:
+        _dbg(attempted=False, provider="none", reason="llm_not_configured")
+        return None
+
+    provider_name = type(client).__name__
+    _dbg(attempted=True, provider=provider_name)
+
+    user_content = (
+        f"Chromosomal concept: {sub_intent.replace('_', ' ')}\n"
+        f"Patient question context (no personal details): {question[:200]}\n"
+        f"Task: Provide a general educational expansion in Hebrew about this chromosomal concept."
+    )
+
+    try:
+        raw = client.call_text_raw(user_content, system_prompt=_CHROMOSOME_EDUCATION_DRAFT_SYSTEM_PROMPT)
+        text = (raw or "").strip()
+        rejection = _validate_gene_education_draft(text) if text else "empty"
+        if rejection == "no_safe_content" or "NO_SAFE_CONTENT" in text:
+            _dbg(generated=False, rejection_code="no_safe_content")
+            return None
+        if rejection:
+            raw2 = client.call_text_raw(user_content, system_prompt=_CHROMOSOME_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT)
+            text = (raw2 or "").strip()
+            rejection = _validate_gene_education_draft(text) if text else "empty"
+            if rejection:
+                _dbg(generated=False, rejection_code=rejection)
+                return None
+
+        _dbg(generated=True)
+        return {
+            "text_he": text,
+            "sub_intent": sub_intent,
+            "generated_by_model": provider_name,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "review_status": "pending",
+            "approved": False,
+            "warning_he": (
+                "טיוטה זו נוצרה על ידי בינה מלאכותית ולא נבדקה על ידי מומחה גנטי. "
+                "תוכנה עשוי להיות כללי מדי או לא מותאם לממצא הספציפי שלך."
+            ),
+        }
+    except Exception as exc:
+        logger.debug("chromosome draft generation failed: %s", type(exc).__name__)
+        _dbg(generated=False, rejection_code=str(type(exc).__name__))
+        return None
+
+
 def _build_chromosome_education_answer(question: str, sub_intent: str) -> dict:
     """
-    Return a general chromosomal/cytogenetic educational answer.
-    Never assumes a specific diagnosis; always defers to the genetics team.
+    Return a chromosomal/cytogenetic educational answer.
+
+    Main answer: always the deterministic KB entry (never replaced by a draft).
+    Supplemental draft card: optional AI expansion shown in immediate mode;
+    approved chromosome drafts are also supplemental (not main-answer replacements).
     """
     kb_entry = _CYTOGENETIC_KB.get(sub_intent) or _CYTOGENETIC_KB["chromosome_finding_general"]
-    answer_text = kb_entry["answer_he"]
+    main_answer = kb_entry["answer_he"]
     suggested = kb_entry.get("suggested_questions", _CHROMOSOME_EDUCATION_SUGGESTED_QUESTIONS_DEFAULT)
-    return {
-        "answer": answer_text,
+
+    # Optional AI draft expansion (supplemental only).
+    _chr_draft_debug: dict = {}
+    chr_draft: "Optional[dict]" = None
+    if _is_safe_for_chromosome_draft(question):
+        chr_draft = _generate_chromosome_education_draft(
+            question, sub_intent, _debug=_chr_draft_debug,
+        )
+
+    chr_draft_available = chr_draft is not None
+
+    # Check for physician-approved chromosome draft (still supplemental, not main).
+    _approved_chr_draft: "Optional[dict]" = None
+    try:
+        from app import review_db as _rdb
+        _approved_chr_draft = _rdb.get_approved_chromosome_draft(sub_intent)
+    except Exception:
+        pass
+
+    # Supplemental card visibility — deterministic KB is always the main answer.
+    _chr_draft_text = (chr_draft or {}).get("text_he", "")
+    if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+        chr_draft_displayable = False
+        _chr_draft_hidden_reason: "Optional[str]" = (
+            "approved_only_mode" if chr_draft_available else "no_draft"
+        )
+    else:
+        chr_draft_displayable = (
+            chr_draft_available
+            and _draft_adds_meaningful_information(_chr_draft_text, main_answer)
+        )
+        _chr_draft_hidden_reason = (
+            None if chr_draft_displayable
+            else "no_draft" if not chr_draft_available
+            else "identical_to_main_answer"
+        )
+
+    # Auto-enqueue new draft to physician review DB (non-blocking; never raises).
+    if chr_draft_available and chr_draft:
+        try:
+            from app import review_db as _rdb
+            _rdb.create_draft(
+                draft_type="chromosome_education",
+                original_ai_text=chr_draft.get("text_he", ""),
+                gene_symbol=None,
+                normalized_intent=sub_intent,
+                model_provider=_chr_draft_debug.get("provider"),
+                model_name=chr_draft.get("generated_by_model"),
+                prompt_version="s277",
+                source_metadata={"sub_intent": sub_intent},
+            )
+        except Exception:
+            pass
+
+    result: dict = {
+        "answer": main_answer,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
         "matched_topic": sub_intent,
         "suggested_questions": list(suggested),
-        "llm_used": False,
+        "llm_used": chr_draft_available,
         "fallback_used": False,
+        "chromosome_draft_metadata": {
+            "sub_intent": sub_intent,
+            "draft_available": chr_draft_available,
+            "draft_displayable": chr_draft_displayable,
+            "draft_hidden_reason": _chr_draft_hidden_reason,
+            # Approved chromosome drafts are SUPPLEMENTAL (never replace the
+            # deterministic KB main answer).
+            "approved_draft_available": _approved_chr_draft is not None,
+            "approved_draft_promoted": False,  # always False for chromosome education
+        },
     }
+    if chr_draft_available:
+        result["unverified_chromosome_draft"] = chr_draft
+
+    return result
 
 
 # ---------------------------------------------------------------------------

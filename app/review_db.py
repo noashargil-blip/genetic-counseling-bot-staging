@@ -599,3 +599,42 @@ def get_approved_draft(gene_symbol: str, draft_type: str = "gene_summary") -> Op
     except Exception as exc:
         logger.error("review_db: get_approved_draft(%s) failed: %s", gene_symbol, type(exc).__name__)
         return None
+
+
+def get_approved_chromosome_draft(normalized_intent: str) -> Optional[dict]:
+    """
+    Return the most recently approved chromosome_education draft for the given
+    normalized intent, or None.
+
+    Unlike get_approved_draft(), this queries by normalized_intent (not
+    gene_symbol), because chromosome education drafts are not gene-specific.
+    """
+    try:
+        with _get_connection() as conn:
+            ph = _ph()
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT * FROM review_drafts
+                WHERE draft_type = {ph}
+                  AND normalized_intent = {ph}
+                  AND review_status = 'approved'
+                ORDER BY reviewed_at DESC
+                LIMIT 1
+                """,
+                ("chromosome_education", normalized_intent),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            d = _row_to_dict(row)
+            d["effective_text"] = d.get("physician_edited_text") or d.get("original_ai_text", "")
+            d["physician_reviewed"] = True
+            d["physician_approved"] = True
+            return d
+    except Exception as exc:
+        logger.error(
+            "review_db: get_approved_chromosome_draft(%s) failed: %s",
+            normalized_intent, type(exc).__name__,
+        )
+        return None

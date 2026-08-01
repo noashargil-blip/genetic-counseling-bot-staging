@@ -330,6 +330,24 @@ class CounselingAskResponse(BaseModel):
             "Never contains API keys, prompts, or personal data."
         ),
     )
+    chromosome_draft_metadata: Optional[dict] = Field(
+        None,
+        description=(
+            "Present only for chromosome_education answers. "
+            "Contains sub_intent, draft_available, draft_displayable, "
+            "draft_hidden_reason, approved_draft_available, approved_draft_promoted. "
+            "approved_draft_promoted is always False — approved chromosome drafts are "
+            "supplemental and never replace the deterministic KB main answer."
+        ),
+    )
+    unverified_chromosome_draft: Optional[dict] = Field(
+        None,
+        description=(
+            "Present when a chromosome_education answer generated a valid AI expansion. "
+            "Contains text_he, sub_intent, warning_he, review_status, approved. "
+            "Never contains personal data. Always absent in approved_only mode."
+        ),
+    )
 
     @model_serializer
     def _serialize(self) -> dict:
@@ -368,6 +386,10 @@ class CounselingAskResponse(BaseModel):
             out["unverified_general_draft"] = self.unverified_general_draft
         if self.ai_general_debug is not None:
             out["ai_general_debug"] = self.ai_general_debug
+        if self.chromosome_draft_metadata is not None:
+            out["chromosome_draft_metadata"] = self.chromosome_draft_metadata
+        if self.unverified_chromosome_draft is not None:
+            out["unverified_chromosome_draft"] = self.unverified_chromosome_draft
         return out
 
 
