@@ -1332,6 +1332,38 @@ def _build_extra_chromosome_answer() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Chromosome number extraction helper (used for follow-up routing context)
+# ---------------------------------------------------------------------------
+
+_CHROMOSOME_NUMBER_RE = re.compile(
+    r"(?:כרומוזום|chromosome)\s*(\d{1,2}|X|Y)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_chromosome_number(text: str) -> "Optional[str]":
+    """Extract chromosome identifier from text like 'כרומוזום 21' → '21'."""
+    m = _CHROMOSOME_NUMBER_RE.search(text)
+    if m:
+        return m.group(1).upper()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# AI content type classification (Session 27.8 Part A)
+# ---------------------------------------------------------------------------
+
+# SOURCE_GROUNDED_PHRASING: LLM only phrases supplied structured data
+# (phenotypes, approved context summary).  No physician review required.
+# Must NOT populate the physician review queue (Part I).
+AI_CONTENT_TYPE_GROUNDED = "source_grounded_phrasing"
+
+# AI_EXPANDED_UNVERIFIED: LLM adds biology beyond supplied data.  Must go
+# to the physician review queue before appearing in patient-facing answers.
+AI_CONTENT_TYPE_EXPANDED = "ai_expanded_unverified"
+
+
+# ---------------------------------------------------------------------------
 # General chromosomal / cytogenetic education
 # (Does NOT overlap with trisomy21 or extra_chromosome handlers above;
 #  those fire first in classify_question_intent.)
@@ -1404,7 +1436,14 @@ _CYTOGENETIC_KB: dict = {
             "לא ניתן לקבוע את המשמעות הקלינית רק לפי ה\"כרומוזום\" שצוין — נדרש פירוט מלא של הדוח. "
             "הצוות הגנטי שבדק אתכם הוא הגורם המתאים להסביר את המשמעות הספציפית של הממצא."
         ),
+        # Bot-clickable educational follow-up questions
         "suggested_questions": [
+            "מה ההבדל בין מחיקה לבין כפילות כרומוזומית?",
+            "מה זה פסיפס (מוזאיקה) גנטי?",
+            "מה בדיקת קריוטיפ יכולה לגלות?",
+        ],
+        # Questions to ask the genetics team (non-clickable, shown under separate heading)
+        "clinician_questions": [
             "מה סוג הממצא שנמצא בכרומוזום — עודף, חסר, מחיקה או שינוי מבני אחר?",
             "האם הממצא קיים בכל התאים או רק בחלקם?",
             "מה המשמעות הקלינית של הממצא הספציפי הזה?",
@@ -1421,6 +1460,10 @@ _CYTOGENETIC_KB: dict = {
             "הצוות הגנטי שטיפל בכם יסביר את המשמעות של המחיקה הספציפית שנמצאה."
         ),
         "suggested_questions": [
+            "מה ההבדל בין מחיקה לבין כפילות כרומוזומית?",
+            "איך מזהים מחיקה — קריוטיפ או מיקרואריי?",
+        ],
+        "clinician_questions": [
             "מה המיקום המדויק של המחיקה (כרומוזום ואזור)?",
             "האם המחיקה כוללת גנים ידועים?",
             "האם ניתן לבדוק אם המחיקה נמצאת גם אצל ההורים?",
@@ -1436,6 +1479,10 @@ _CYTOGENETIC_KB: dict = {
             "הצוות הגנטי שטיפל בכם יסביר את המשמעות של הכפילות הספציפית שנמצאה."
         ),
         "suggested_questions": [
+            "מה ההבדל בין מחיקה לבין כפילות כרומוזומית?",
+            "מה זה VUS בהקשר של כפילות כרומוזומית?",
+        ],
+        "clinician_questions": [
             "מה המיקום המדויק של הכפילות?",
             "האם הכפילות כוללת גנים ידועים?",
             "מה ידוע על ממצאים דומים במאגרים הגנטיים?",
@@ -1453,6 +1500,10 @@ _CYTOGENETIC_KB: dict = {
             "הצוות הגנטי יפרט אם הטרנסלוקציה שנמצאה מאוזנת או לא, ומה המשמעות הספציפית."
         ),
         "suggested_questions": [
+            "מה ההבדל בין טרנסלוקציה מאוזנת ללא מאוזנת?",
+            "האם ניתן להיות נשא של טרנסלוקציה ללא תסמינים?",
+        ],
+        "clinician_questions": [
             "האם הטרנסלוקציה מאוזנת או לא מאוזנת?",
             "אילו כרומוזומים מעורבים ואיפה הנקודות?",
             "האם כדאי לבדוק את שאר בני המשפחה?",
@@ -1471,6 +1522,10 @@ _CYTOGENETIC_KB: dict = {
             "הצוות הגנטי יסביר את אחוז הפסיפס שנמצא ואת המשמעות הספציפית."
         ),
         "suggested_questions": [
+            "מה ההבדל בין ממצא מלא לבין פסיפס?",
+            "האם פסיפס תמיד מורש מההורים?",
+        ],
+        "clinician_questions": [
             "מה אחוז התאים עם הממצא הכרומוזומי?",
             "באילו רקמות בוצעה הבדיקה?",
             "מה ידוע על ביטוי קליני בדרגת פסיפס דומה?",
@@ -1489,6 +1544,10 @@ _CYTOGENETIC_KB: dict = {
             "הצוות הגנטי יסביר מה הבדיקה שבוצעה, ומה הממצא אומר בהקשר שלכם."
         ),
         "suggested_questions": [
+            "מה ההבדל בין קריוטיפ לבין מיקרואריי?",
+            "מה זה מחיקה כרומוזומית?",
+        ],
+        "clinician_questions": [
             "איזו בדיקת כרומוזומים בוצעה — קריוטיפ, מיקרואריי, או אחר?",
             "מה הרזולוציה של הבדיקה שנעשתה?",
             "האם יש צורך בבדיקה נוספת כדי לאשש את הממצא?",
@@ -1506,6 +1565,10 @@ _CYTOGENETIC_KB: dict = {
             "הצוות הגנטי יפרט את הממצא הספציפי ואת המשמעות הרלוונטית לכם."
         ),
         "suggested_questions": [
+            "מה ההבדל בין טריזומיה למונוזומיה?",
+            "מה זה פסיפס (מוזאיקה)?",
+        ],
+        "clinician_questions": [
             "איזה כרומוזום מעורב ומה הממצא המדויק?",
             "האם הממצא נמצא בכל התאים או רק בחלקם (פסיפס)?",
             "מה המשמעות הקלינית של הממצא הספציפי הזה?",
@@ -1541,6 +1604,66 @@ def _detect_chromosome_education(text: str) -> Optional[str]:
         return "aneuploidy_general"
     if _CHROMOSOME_FINDING_GENERAL_RE.search(text):
         return "chromosome_finding_general"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Chromosome follow-up routing (Session 27.8 Part F)
+# ---------------------------------------------------------------------------
+
+_CHROMOSOME_TOPIC_INTENTS: frozenset = frozenset({
+    "chromosome_finding_general",
+    "chromosome_deletion_general",
+    "chromosome_duplication_general",
+    "translocation_general",
+    "mosaicism_general",
+    "cytogenetic_test_general",
+    "aneuploidy_general",
+})
+
+# Short keywords that map a brief follow-up message to a chromosome sub-intent.
+_CHROMOSOME_FOLLOWUP_PATTERNS: list = [
+    ("chromosome_deletion_general",    ["מחיקה", "deletion", "חסר", "חסרה"]),
+    ("chromosome_duplication_general", ["כפילות", "duplication", "כפול", "עודף"]),
+    ("translocation_general",          ["טרנסלוקציה", "translocation"]),
+    ("mosaicism_general",              ["פסיפס", "מוזאיקה", "mosaic"]),
+    ("cytogenetic_test_general",       ["קריוטיפ", "מיקרואריי", "karyotype", "microarray"]),
+    ("aneuploidy_general",             ["אנאופלואידיה", "aneuploidy", "טריזומיה", "מונוזומיה"]),
+]
+
+
+def _resolve_chromosome_followup(
+    text: str,
+    session_context: "Optional[dict]",
+) -> "Optional[dict]":
+    """
+    Detect short chromosome finding-type follow-ups using session context.
+
+    Returns {"sub_intent": ..., "chromosome_number": ...} or None.
+
+    Fires only when:
+      - session_context.active_topic is a chromosome education sub-intent, AND
+      - The message is ≤100 characters, AND
+      - The message contains a known finding-type keyword.
+
+    This must be called AFTER gene routing (E/F) and BEFORE general follow-up
+    detection (step 5) so that finding-type keywords like 'מחיקה' route to
+    the chromosome handler rather than the KB fuzzy lookup.
+    """
+    if not session_context:
+        return None
+    active_topic = (session_context.get("active_topic") or "")
+    if active_topic not in _CHROMOSOME_TOPIC_INTENTS:
+        return None
+    if len(text.strip()) > 100:
+        return None
+    lower = text.lower()
+    for sub_intent, keywords in _CHROMOSOME_FOLLOWUP_PATTERNS:
+        if any(kw in lower for kw in keywords):
+            return {
+                "sub_intent": sub_intent,
+                "chromosome_number": session_context.get("chromosome_number"),
+            }
     return None
 
 
@@ -1676,17 +1799,26 @@ def _generate_chromosome_education_draft(
         return None
 
 
-def _build_chromosome_education_answer(question: str, sub_intent: str) -> dict:
+def _build_chromosome_education_answer(
+    question: str,
+    sub_intent: str,
+    chromosome_number: "Optional[str]" = None,
+) -> dict:
     """
     Return a chromosomal/cytogenetic educational answer.
 
     Main answer: always the deterministic KB entry (never replaced by a draft).
     Supplemental draft card: optional AI expansion shown in immediate mode;
     approved chromosome drafts are also supplemental (not main-answer replacements).
+
+    chromosome_number: optional number (e.g. '21') retained from session context
+    for follow-up routing.  Included in metadata so the frontend can pass it
+    back on the next turn.
     """
     kb_entry = _CYTOGENETIC_KB.get(sub_intent) or _CYTOGENETIC_KB["chromosome_finding_general"]
     main_answer = kb_entry["answer_he"]
     suggested = kb_entry.get("suggested_questions", _CHROMOSOME_EDUCATION_SUGGESTED_QUESTIONS_DEFAULT)
+    clinician_qs = kb_entry.get("clinician_questions", [])
 
     # Optional AI draft expansion (supplemental only).
     _chr_draft_debug: dict = {}
@@ -1741,12 +1873,16 @@ def _build_chromosome_education_answer(question: str, sub_intent: str) -> dict:
         except Exception:
             pass
 
+    # Extract chromosome number from question if not already supplied by context.
+    _chr_number = chromosome_number or _extract_chromosome_number(question)
+
     result: dict = {
         "answer": main_answer,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
         "matched_topic": sub_intent,
         "suggested_questions": list(suggested),
+        "clinician_questions": list(clinician_qs),
         "llm_used": chr_draft_available,
         "fallback_used": False,
         "chromosome_draft_metadata": {
@@ -1758,12 +1894,146 @@ def _build_chromosome_education_answer(question: str, sub_intent: str) -> dict:
             # deterministic KB main answer).
             "approved_draft_available": _approved_chr_draft is not None,
             "approved_draft_promoted": False,  # always False for chromosome education
+            # Retained for session-context follow-up routing (Part F).
+            "chromosome_number_detected": _chr_number,
         },
     }
     if chr_draft_available:
         result["unverified_chromosome_draft"] = chr_draft
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Source-grounded gene answer generation (Session 27.8 Parts B-C)
+# ---------------------------------------------------------------------------
+
+_SOURCE_GROUNDED_GENE_SYSTEM_PROMPT = """\
+You are a genetic counseling educational assistant. Write 2-3 patient-friendly Hebrew
+sentences summarizing the following structured information about gene {gene}.
+
+MANDATORY RULES — violating any rule causes your response to be discarded:
+1. Use ONLY information present in the supplied context below. Never invent biology.
+2. Do NOT add disease mechanisms, molecular pathways, or protein functions not in context.
+3. Do NOT give risk estimates, prognosis, treatment, or surveillance recommendations.
+4. Do NOT use personal pronouns directed at the patient (e.g. 'שלך', 'שלכם').
+5. End with one sentence directing the patient to consult their genetics team.
+6. Maximum 100 words. Write in Hebrew only.
+7. If the context is insufficient for a meaningful patient-facing answer, respond: INSUFFICIENT_CONTEXT
+
+Supplied context for gene {gene}:
+{context}"""
+
+
+def _has_sufficient_grounded_gene_context(
+    gene: str,
+    clinvar_summary: "Optional[dict]",
+) -> "tuple[bool, list]":
+    """
+    Return (has_sufficient, context_parts) for source-grounded gene phrasing.
+
+    Sufficient context requires either:
+      - A physician-approved ClinVar context summary (get_gene_context_summary), or
+      - At least 3 non-trivial ClinVar phenotype associations.
+
+    ClinVar variant counts alone (without phenotypes) are NOT sufficient —
+    they cannot support meaningful biological claims about the gene.
+    """
+    context_parts: list = []
+
+    # 1. Physician-approved ClinVar context summary (strongest grounding).
+    gk_context = gene_knowledge.get_gene_context_summary(gene)
+    if gk_context and len(gk_context.strip()) > 30:
+        context_parts.append({"type": "approved_context", "text": gk_context.strip()})
+
+    # 2. ClinVar phenotypes — factual associations only; require ≥3 non-trivial.
+    if clinvar_summary:
+        _TRIVIAL = frozenset({
+            "not specified", "not provided", "see cases", "not applicable",
+            "all disease", "disease", "",
+        })
+        phenotypes = [
+            p.strip() for p in ((clinvar_summary.get("phenotypes") or [])[:8])
+            if p and p.strip().lower() not in _TRIVIAL and len(p.strip()) > 5
+        ]
+        if len(phenotypes) >= 3:
+            context_parts.append({"type": "clinvar_phenotypes", "phenotypes": phenotypes[:6]})
+
+    return len(context_parts) > 0, context_parts
+
+
+def _generate_source_grounded_gene_answer(
+    gene: str,
+    context_parts: list,
+    _debug: "Optional[dict]" = None,
+) -> "Optional[str]":
+    """
+    Generate a source-grounded gene answer using only the supplied context parts.
+
+    Classification: AI_CONTENT_TYPE_GROUNDED — no physician review required,
+    must NOT populate the physician review queue (Part I).
+    Returns plain Hebrew text or None on failure.  Never raises.
+    """
+    if not context_parts:
+        return None
+
+    def _dbg(**kw: object) -> None:
+        if isinstance(_debug, dict):
+            _debug.update(kw)
+
+    context_lines: list = []
+    for part in context_parts:
+        ptype = part.get("type")
+        if ptype == "approved_context":
+            context_lines.append(f"Physician-approved context: {part['text']}")
+        elif ptype == "clinvar_phenotypes":
+            phenotypes = part.get("phenotypes", [])
+            context_lines.append(f"ClinVar reported associations: {', '.join(phenotypes)}")
+
+    if not context_lines:
+        return None
+
+    context_text = "\n".join(context_lines)
+    system_prompt = _SOURCE_GROUNDED_GENE_SYSTEM_PROMPT.format(
+        gene=gene, context=context_text
+    )
+    user_content = (
+        f"Gene: {gene}\n"
+        f"Task: Write 2-3 patient-friendly Hebrew sentences about this gene "
+        f"using only the above supplied context."
+    )
+
+    try:
+        client = create_llm_client()
+    except ValueError:
+        _dbg(attempted=False, reason="llm_not_configured")
+        return None
+
+    _dbg(attempted=True, provider=type(client).__name__, ai_content_type=AI_CONTENT_TYPE_GROUNDED)
+
+    try:
+        raw = client.call_text_raw(user_content, system_prompt=system_prompt)
+        text = (raw or "").strip()
+        if not text or "INSUFFICIENT_CONTEXT" in text:
+            _dbg(generated=False, reason="insufficient_context")
+            return None
+        if len(text) > 600:
+            _dbg(generated=False, reason="too_long")
+            return None
+        lower = text.lower()
+        _personal = ["הסיכון שלך", "הפרוגנוזה שלך", "הסיכוי שלך", "הסיכון שלכם"]
+        if any(p in lower for p in _personal):
+            _dbg(generated=False, reason="personal_language_detected")
+            return None
+        # Must have substantial Hebrew content.
+        if sum(1 for c in text if "א" <= c <= "ת") < 20:
+            _dbg(generated=False, reason="insufficient_hebrew")
+            return None
+        _dbg(generated=True)
+        return text
+    except Exception as exc:
+        _dbg(generated=False, reason=str(type(exc).__name__))
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -3878,7 +4148,6 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         }
 
     # Tier 2: no approved gene card or knowledge base record, but gene is in ClinVar index.
-    # Function-first: use the AI-generated draft as the MAIN answer when available.
     # ClinVar details (significance_breakdown, top_phenotypes) remain in
     # gene_metadata for the collapsed technical UI card.
     _correction_prefix_t2 = (
@@ -3892,50 +4161,72 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         f"לשאלות ספציפיות, פנה לצוות הגנטי שטיפל בך."
     )
     suggested = _gene_suggested_questions(question, gene)
+
+    # Session 27.8 Part B: check for source-grounded phrasing FIRST.
+    # Grounded phrasing uses only supplied context (ClinVar phenotypes /
+    # approved_context_summary) and does NOT require physician review.
+    # ClinVar variant counts alone are NOT sufficient (Part B invariant).
+    _grounded_debug: dict = {}
+    has_grounded, grounded_ctx = _has_sufficient_grounded_gene_context(gene, summary)
+    grounded_answer: "Optional[str]" = None
+    if has_grounded:
+        grounded_answer = _generate_source_grounded_gene_answer(
+            gene, grounded_ctx, _debug=_grounded_debug
+        )
+
+    # Session 27.8 Part C: gene answer cascade
+    # Tier 2 priority: grounded phrasing → approved physician draft → fallback+unverified.
+    # Only generate unverified draft when grounded phrasing is unavailable (Part I).
     _draft_debug: dict = {}
-    unverified_draft = _generate_unverified_gene_draft(
-        gene, question, clinvar_context=summary, use_lenient_validator=True,
-        _debug=_draft_debug,
-    )
-    draft_available = unverified_draft is not None
-
-    # Session 27.7 Part B: look for a physician-approved draft in ALL visibility
-    # modes.  Approved (physician-vetted) content fills the curated-content gap
-    # regardless of whether pending/unreviewed drafts are shown.
+    unverified_draft = None
+    draft_available = False
     _approved_db_draft = None
-    try:
-        from app import review_db as _rdb
-        _approved_db_draft = _rdb.get_approved_draft(gene, draft_type="gene_summary")
-    except Exception:
-        pass  # degraded silently — show fallback
+    _draft_promoted = False
 
-    # Answer selection — priority: approved > fallback.
-    # PENDING drafts NEVER become the main answer (Session 27.6.1 invariant).
-    if _approved_db_draft:
-        # Physician-vetted content fills the tier-2 gap in both modes.
-        main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
-        _draft_promoted = True
-        if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
-            # approved_only: suppress the pending card entirely (approved IS the answer)
-            draft_available = False
-    elif _AI_DRAFT_VISIBILITY_MODE == "approved_only":
-        # No approved draft, approved-only mode: fallback + suppress pending card.
-        main_answer = tier2_fallback_answer
-        _draft_promoted = False
-        draft_available = False
+    if grounded_answer:
+        # Source-grounded: LLM phrases supplied context; no review queue; no unverified card.
+        main_answer = _correction_prefix_t2 + grounded_answer
+        _answer_source = AI_CONTENT_TYPE_GROUNDED
     else:
-        # immediate mode, no approved draft: deterministic fallback.
-        # Pending draft may appear as supplemental card below.
-        main_answer = tier2_fallback_answer
-        _draft_promoted = False
+        # Session 27.7 Part B: look for a physician-approved draft in ALL visibility
+        # modes.  Approved (physician-vetted) content fills the curated-content gap
+        # regardless of whether pending/unreviewed drafts are shown.
+        try:
+            from app import review_db as _rdb
+            _approved_db_draft = _rdb.get_approved_draft(gene, draft_type="gene_summary")
+        except Exception:
+            pass  # degraded silently — show fallback
 
-    # Supplemental card visibility.
-    # Show only when: immediate mode, no approved draft used, draft adds new content.
+        if _approved_db_draft:
+            main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
+            _answer_source = "approved"
+            _draft_promoted = True
+            if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+                draft_available = False
+        else:
+            # No grounded context, no approved draft: generate unverified expansion.
+            # PENDING drafts NEVER become the main answer (Session 27.6.1 invariant).
+            unverified_draft = _generate_unverified_gene_draft(
+                gene, question, clinvar_context=summary, use_lenient_validator=True,
+                _debug=_draft_debug,
+            )
+            draft_available = unverified_draft is not None
+            if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
+                main_answer = tier2_fallback_answer
+                _answer_source = "fallback"
+                draft_available = False
+            else:
+                main_answer = tier2_fallback_answer
+                _answer_source = "fallback"
+
+    # Supplemental card visibility — only for unverified expanded drafts.
+    # Grounded answers (main) and approved-promoted answers never show a second card.
     _draft_text_he = (unverified_draft or {}).get("text_he", "")
-    if _draft_promoted:
-        # Approved text is already the main answer — no need for a second card.
+    if grounded_answer or _draft_promoted:
         draft_displayable = False
-        _draft_hidden_reason: "Optional[str]" = "approved_text_is_main_answer"
+        _draft_hidden_reason: "Optional[str]" = (
+            "grounded_answer_is_main" if grounded_answer else "approved_text_is_main_answer"
+        )
     elif _AI_DRAFT_VISIBILITY_MODE == "approved_only":
         draft_displayable = False
         _draft_hidden_reason = "approved_only_mode" if draft_available else "no_draft"
@@ -3956,24 +4247,41 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         "needs_genetic_counselor": False,
         "matched_topic": "gene_clinvar_summary",
         "suggested_questions": suggested,
-        "llm_used": draft_available,
-        "fallback_used": not draft_available,
-        "llm_mode": "draft_openai" if draft_available else "none",
+        "llm_used": grounded_answer is not None or draft_available,
+        "fallback_used": grounded_answer is None and not draft_available,
+        "llm_mode": (
+            "source_grounded" if grounded_answer
+            else "draft_openai" if draft_available
+            else "none"
+        ),
         "gene_metadata": {
             "gene_symbol": gene,
             "data_source": "ClinVar (NCBI) via local gene index",
-            "llm_used": draft_available,
-            "fallback_used": not draft_available,
+            "llm_used": grounded_answer is not None or draft_available,
+            "fallback_used": grounded_answer is None and not draft_available,
             "total_variants": summary.get("total_variants"),
             "found_in_index": True,
             "answer_tier": "tier2",
-            "gene_knowledge_status": "approved" if _draft_promoted else "unverified_available",
+            "gene_knowledge_status": (
+                "approved" if _draft_promoted
+                else "grounded" if grounded_answer
+                else "unverified_available" if draft_available
+                else "missing"
+            ),
             "unverified_gene_draft_available": draft_available,
             # True only when the draft adds content not already in the main answer.
             "unverified_gene_draft_displayable": draft_displayable,
             "draft_hidden_reason": _draft_hidden_reason,
             # True when a physician-approved draft text is the main answer.
             "draft_promoted_to_answer": _draft_promoted,
+            # Session 27.8 Part A: AI content type classification.
+            "ai_content_type": (
+                AI_CONTENT_TYPE_GROUNDED if grounded_answer
+                else AI_CONTENT_TYPE_EXPANDED if draft_available
+                else None
+            ),
+            "source_grounded": grounded_answer is not None,
+            "requires_physician_review": draft_available and not grounded_answer,
             "ai_draft_attempted": _draft_debug.get("attempted", False),
             "ai_draft_generated": draft_available,
             "significance_breakdown": summary.get("by_significance") or {},
@@ -3999,8 +4307,9 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         }
         result["ai_draft_debug"].setdefault("shown", False)
 
-    # Auto-enqueue to physician review DB (non-blocking; never raises to caller).
-    if draft_available and unverified_draft:
+    # Auto-enqueue to physician review DB for AI_EXPANDED_UNVERIFIED only.
+    # SOURCE_GROUNDED_PHRASING must NOT populate the physician review queue (Part I).
+    if draft_available and unverified_draft and not grounded_answer:
         try:
             from app import review_db as _rdb  # lazy import to avoid circular dep
             _rdb.create_draft(
@@ -4534,6 +4843,7 @@ def answer_question(
     conversation_context: Optional[list] = None,
     last_topic: Optional[str] = None,
     include_unverified_gene_draft: bool = False,
+    session_context: Optional[dict] = None,
 ) -> dict:
     """
     Build the full response for POST /ask.
@@ -4690,6 +5000,18 @@ def answer_question(
             known = _detect_known_gene(text)
             if known:
                 return _build_gene_education_fallback(known)
+
+    # 4.5. Chromosome follow-up routing (Session 27.8 Part F).
+    # Fires when session_context.active_topic is a chromosome education sub-intent
+    # and the message contains a finding-type keyword (e.g. 'מחיקה', 'duplication').
+    # Must be AFTER gene routing (E/F) and BEFORE general follow-up detection (step 5).
+    _chr_followup = _resolve_chromosome_followup(text, session_context)
+    if _chr_followup:
+        return _build_chromosome_education_answer(
+            text,
+            _chr_followup["sub_intent"],
+            chromosome_number=_chr_followup.get("chromosome_number"),
+        )
 
     # 5. Follow-up handling — vague continuation phrases resolved via
     #    last_topic / sanitized conversation context, not KB keyword scoring.

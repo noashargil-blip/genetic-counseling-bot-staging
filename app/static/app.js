@@ -2,12 +2,23 @@
 
 // ── State (in-memory only — nothing is persisted, per the no-history rule) ──
 // { id, role:'user'|'bot'|'bot-pending', text, safetyLevel, suggestedQuestions,
-//   matchedTopic, geneMetadata, llmUsed, fallbackUsed, feedbackState, isWelcome }
+//   clinicianQuestions, matchedTopic, geneMetadata, llmUsed, fallbackUsed,
+//   feedbackState, isWelcome, chromosomeNumber, normalizedIntent }
 let messages = [];
 let isSending = false;
 let lastTopic = null;
 
 const CONTEXT_WINDOW = 6;
+
+// ── Safe session context builder (Session 27.8 Part E) ────────────────────────
+function buildSafeSessionContext() {
+  const lastBot = [...messages].reverse().find((m) => m.role === 'bot' && !m.isWelcome);
+  if (!lastBot || !lastBot.matchedTopic) return null;
+  const ctx = { active_topic: lastBot.matchedTopic };
+  if (lastBot.chromosomeNumber) ctx.chromosome_number = lastBot.chromosomeNumber;
+  if (lastBot.normalizedIntent) ctx.normalized_intent = lastBot.normalizedIntent;
+  return ctx;
+}
 
 // ── Demo questions (shown in the demo strip) ─────────────────────────────────
 const DEMO_QUESTIONS = [
@@ -166,6 +177,7 @@ async function sendQuestion(question, topic) {
   const pendingId = addMessage('bot-pending', PENDING_TEXT_HE);
 
   try {
+    const safeCtx = buildSafeSessionContext();
     const resp = await fetch('/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -174,6 +186,7 @@ async function sendQuestion(question, topic) {
         topic: topic || undefined,
         conversation_context: conversationContext.length ? conversationContext : undefined,
         last_topic: lastTopicForThisTurn || undefined,
+        context: safeCtx || undefined,
       }),
     });
 
@@ -210,6 +223,21 @@ async function sendQuestion(question, topic) {
         botMsg.generalDraft = data.unverified_general_draft;
       }
     }
+    // Clinician questions (non-clickable, for the genetics team)
+    if (data.clinician_questions && data.clinician_questions.length) {
+      const botMsg = messages.find((m) => m.id === pendingId);
+      if (botMsg) {
+        botMsg.clinicianQuestions = data.clinician_questions;
+      }
+    }
+    // Chromosome context for session-follow-up routing (Part F)
+    if (data.chromosome_draft_metadata) {
+      const botMsg = messages.find((m) => m.id === pendingId);
+      if (botMsg) {
+        botMsg.chromosomeNumber = data.chromosome_draft_metadata.chromosome_number_detected || null;
+        botMsg.normalizedIntent = data.chromosome_draft_metadata.sub_intent || null;
+      }
+    }
     lastTopic = data.matched_topic || lastTopic;
   } catch (err) {
     const msg = 'לא ניתן היה להתחבר לשרת. בדקי את החיבור לאינטרנט ונסי שוב.';
@@ -236,6 +264,7 @@ function addMessage(role, text, safetyLevel, suggestedQuestions, matchedTopic, g
   messages.push({
     id, role, text, safetyLevel,
     suggestedQuestions: suggestedQuestions || [],
+    clinicianQuestions: [],
     matchedTopic: matchedTopic || null,
     geneMetadata: geneMetadata || null,
     llmUsed: llmUsed || false,
@@ -245,6 +274,8 @@ function addMessage(role, text, safetyLevel, suggestedQuestions, matchedTopic, g
     unverifiedDraft: null,
     unverifiedDraftState: null,
     generalDraft: null,
+    chromosomeNumber: null,
+    normalizedIntent: null,
   });
   renderMessages();
   return id;
@@ -263,6 +294,9 @@ function replaceMessage(id, role, text, safetyLevel, suggestedQuestions, matched
     if (msg.unverifiedDraft === undefined) msg.unverifiedDraft = null;
     if (msg.unverifiedDraftState === undefined) msg.unverifiedDraftState = null;
     if (msg.generalDraft === undefined) msg.generalDraft = null;
+    if (msg.clinicianQuestions === undefined) msg.clinicianQuestions = [];
+    if (msg.chromosomeNumber === undefined) msg.chromosomeNumber = null;
+    if (msg.normalizedIntent === undefined) msg.normalizedIntent = null;
   }
   renderMessages();
 }
@@ -393,6 +427,25 @@ function renderMessages() {
           chipsWrap.appendChild(chip);
         });
         bubble.appendChild(chipsWrap);
+      }
+
+      // Clinician questions — non-clickable bullets for the genetics team (last bot only)
+      if (!m.isWelcome && idx === lastBotIndex && m.clinicianQuestions && m.clinicianQuestions.length) {
+        const cqDiv = document.createElement('div');
+        cqDiv.className = 'clinician-questions';
+        const cqHeading = document.createElement('p');
+        cqHeading.className = 'clinician-questions-heading';
+        cqHeading.textContent = 'שאלות שכדאי לשאול את הצוות הגנטי:';
+        cqDiv.appendChild(cqHeading);
+        const cqList = document.createElement('ul');
+        cqList.className = 'clinician-questions-list';
+        m.clinicianQuestions.forEach((q) => {
+          const li = document.createElement('li');
+          li.textContent = q;
+          cqList.appendChild(li);
+        });
+        cqDiv.appendChild(cqList);
+        bubble.appendChild(cqDiv);
       }
 
       // ClinVar technical card (Tier 2 only, skip for welcome/pending)

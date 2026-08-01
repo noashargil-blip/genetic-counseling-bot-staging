@@ -143,6 +143,37 @@ button { font-family: inherit; cursor: pointer; }
 .suggested-chip:hover { background: #dcebf9; }
 .suggested-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ── Clinician questions (non-clickable, genetics team questions) ── */
+.clinician-questions {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  background: #f7f9fb;
+  border-right: 3px solid #5a8ab0;
+  border-radius: 0 0.35rem 0.35rem 0;
+}
+
+.clinician-questions-heading {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #3a6185;
+  margin: 0 0 0.4rem 0;
+  letter-spacing: 0.01em;
+}
+
+.clinician-questions-list {
+  margin: 0;
+  padding-right: 1.2rem;
+  padding-left: 0;
+  list-style-type: disc;
+}
+
+.clinician-questions-list li {
+  font-size: 0.8rem;
+  color: #4a6880;
+  line-height: 1.5;
+  margin-bottom: 0.2rem;
+}
+
 /* ── Demo strip ─────────────────────────────────────────────────── */
 /* Compact scrollable row of predefined demo questions. Appears     */
 /* between the chat header and the message list.                     */

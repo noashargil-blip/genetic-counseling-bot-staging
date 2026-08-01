@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, field_validator, model_serializer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -236,6 +236,90 @@ class ConversationContextMessage(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# Safe session context (Session 27.8 Part D/E)
+# ---------------------------------------------------------------------------
+
+_SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS: frozenset = frozenset({
+    "chromosome_finding_general", "chromosome_deletion_general",
+    "chromosome_duplication_general", "translocation_general",
+    "mosaicism_general", "cytogenetic_test_general", "aneuploidy_general",
+    "gene_clinvar_summary", "vus", "vus_known_gene", "vus_general",
+    "carrier", "carrier_vs_affected", "carrier_general",
+    "trisomy21_education", "extra_chromosome_education", "chromosomal_finding",
+    "gene_info", "inheritance", "genetic_test_general", "specific_variant",
+})
+
+
+class SafeSessionContext(BaseModel):
+    """
+    Structured per-turn context sent by the frontend.  Validated server-side
+    against whitelists — no raw text fields, no PII, no HGVS/ISCN notation.
+    """
+    active_topic: Optional[str] = Field(
+        None, max_length=80,
+        description="matched_topic from the previous assistant turn",
+    )
+    normalized_intent: Optional[str] = Field(
+        None, max_length=80,
+        description="Chromosome or VUS sub-intent from the previous turn",
+    )
+    gene_symbol: Optional[str] = Field(
+        None, max_length=20,
+        description="Gene symbol from the previous turn (e.g. 'APOE')",
+    )
+    chromosome_number: Optional[str] = Field(
+        None, max_length=5,
+        description="Chromosome number detected in the previous turn (e.g. '21')",
+    )
+    finding_type: Optional[str] = Field(
+        None, max_length=40,
+        description="Chromosomal finding type from the previous turn",
+    )
+    test_type: Optional[str] = Field(
+        None, max_length=40,
+        description="Genetic test type from the previous turn",
+    )
+    last_answer_category: Optional[str] = Field(
+        None, max_length=40,
+        description="Category of the previous answer (e.g. 'curated', 'grounded')",
+    )
+    turn_count: Optional[int] = Field(
+        None, ge=0, le=200,
+        description="Number of user turns so far in the session",
+    )
+
+    @field_validator("active_topic", mode="before")
+    @classmethod
+    def _validate_active_topic(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s in _SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS else None
+
+    @field_validator("chromosome_number", mode="before")
+    @classmethod
+    def _validate_chromosome_number(cls, v: object) -> Optional[str]:
+        import re as _re
+        if v is None:
+            return None
+        s = str(v).strip()
+        if _re.fullmatch(r"(?:[1-9]|1\d|2[0-2]|X|Y)", s, _re.IGNORECASE):
+            return s.upper()
+        return None
+
+    @field_validator("gene_symbol", mode="before")
+    @classmethod
+    def _validate_gene_symbol(cls, v: object) -> Optional[str]:
+        import re as _re
+        if v is None:
+            return None
+        s = str(v).strip()
+        if _re.fullmatch(r"[A-Za-z0-9\-]{1,20}", s):
+            return s.upper()
+        return None
+
+
 class CounselingAskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000, description="User question, in Hebrew")
     topic: Optional[str] = Field(
@@ -266,6 +350,15 @@ class CounselingAskRequest(BaseModel):
             "Gene symbol from the previous assistant turn (e.g. 'APOE'). "
             "Used for follow-up routing when the user asks a gene-level question "
             "without repeating the gene name."
+        ),
+    )
+    context: Optional[SafeSessionContext] = Field(
+        None,
+        description=(
+            "Optional structured session context from the frontend. "
+            "Validated server-side against whitelists (Part D/E). "
+            "Used for chromosome follow-up routing and intent refinement. "
+            "No PII, no HGVS/ISCN, no raw text."
         ),
     )
 
@@ -348,6 +441,15 @@ class CounselingAskResponse(BaseModel):
             "Never contains personal data. Always absent in approved_only mode."
         ),
     )
+    clinician_questions: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Questions to ask the genetics team (non-clickable). "
+            "Rendered under the heading 'שאלות שכדאי לשאול את הצוות הגנטי'. "
+            "Distinct from suggested_questions which are bot-clickable follow-ups. "
+            "Present for chromosome education answers; absent for other answer types."
+        ),
+    )
 
     @model_serializer
     def _serialize(self) -> dict:
@@ -390,6 +492,8 @@ class CounselingAskResponse(BaseModel):
             out["chromosome_draft_metadata"] = self.chromosome_draft_metadata
         if self.unverified_chromosome_draft is not None:
             out["unverified_chromosome_draft"] = self.unverified_chromosome_draft
+        if self.clinician_questions is not None:
+            out["clinician_questions"] = self.clinician_questions[:5]
         return out
 
 
@@ -519,12 +623,14 @@ def ask(request: CounselingAskRequest):
         if request.conversation_context
         else None
     )
+    safe_ctx = request.context.model_dump() if request.context else None
     result = counseling_engine.answer_question(
         request.question,
         topic=request.topic,
         conversation_context=context,
         last_topic=request.last_topic,
         include_unverified_gene_draft=request.include_unverified_gene_draft,
+        session_context=safe_ctx,
         # last_gene_symbol is intentionally not passed — context bleed prevention.
     )
     return CounselingAskResponse(**result)
