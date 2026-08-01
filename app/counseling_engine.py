@@ -1657,6 +1657,60 @@ _CHROMOSOME_FOLLOWUP_PATTERNS: list = [
     ("aneuploidy_general",             ["אנאופלואידיה", "aneuploidy", "טריזומיה", "מונוזומיה"]),
 ]
 
+# Context-aware openers prepended to the KB answer when chromosome_number is known (Part H).
+# Directly addresses the chromosome the patient mentioned rather than being fully generic.
+_CHROMOSOME_CONTEXT_OPENERS: dict = {
+    "chromosome_deletion_general": (
+        "אם הכוונה היא למחיקה בכרומוזום {chromosome_number}, "
+        "מדובר בחסר של קטע מסוים מכרומוזום {chromosome_number}."
+    ),
+    "chromosome_duplication_general": (
+        "אם הכוונה היא לכפילות בכרומוזום {chromosome_number}, "
+        "מדובר בעותק עודף של קטע מסוים מכרומוזום {chromosome_number}."
+    ),
+    "translocation_general": (
+        "אם מדובר בממצא בכרומוזום {chromosome_number}, "
+        "מדובר בשינוי מבני שבו קטע מכרומוזום {chromosome_number} עבר למיקום אחר."
+    ),
+    "mosaicism_general": (
+        "אם מדובר בפסיפס בכרומוזום {chromosome_number}, "
+        "המשמעות היא שהשינוי בכרומוזום {chromosome_number} קיים רק בחלק מהתאים."
+    ),
+    "aneuploidy_general": (
+        "אם מדובר בשינוי במספר עותקי כרומוזום {chromosome_number}, "
+        "הממצא מתאר מצב שבו מספר העותקים של כרומוזום {chromosome_number} שונה מהרגיל."
+    ),
+}
+
+# Context-aware clinician questions when chromosome_number is known (Part J).
+_CHROMOSOME_CONTEXT_CLINICIAN_QUESTIONS: dict = {
+    "chromosome_deletion_general": [
+        "מה הגודל והמיקום המדויק של המחיקה בכרומוזום {chromosome_number}?",
+        "האם המחיקה בכרומוזום {chromosome_number} כוללת גנים ידועים?",
+        "האם ניתן לבדוק אם המחיקה בכרומוזום {chromosome_number} נמצאת גם אצל ההורים?",
+    ],
+    "chromosome_duplication_general": [
+        "מה הגודל והמיקום המדויק של הכפילות בכרומוזום {chromosome_number}?",
+        "האם הכפילות בכרומוזום {chromosome_number} כוללת גנים ידועים?",
+        "מה ידוע על ממצאים דומים בכרומוזום {chromosome_number} במאגרים הגנטיים?",
+    ],
+    "translocation_general": [
+        "אילו כרומוזומים מעורבים בטרנסלוקציה, ומה תפקיד כרומוזום {chromosome_number}?",
+        "האם הטרנסלוקציה הכוללת כרומוזום {chromosome_number} מאוזנת או לא מאוזנת?",
+        "האם ניתן לבדוק את ההורים לגבי טרנסלוקציה בכרומוזום {chromosome_number}?",
+    ],
+    "mosaicism_general": [
+        "איזה אחוז מהתאים נושא את הממצא בכרומוזום {chromosome_number}?",
+        "באיזו בדיקה זוהה הפסיפס בכרומוזום {chromosome_number}?",
+        "מה המשמעות הקלינית של פסיפס בכרומוזום {chromosome_number}?",
+    ],
+    "aneuploidy_general": [
+        "מה מספר העותקים שנמצאו של כרומוזום {chromosome_number}?",
+        "האם הממצא בכרומוזום {chromosome_number} קיים בכל התאים או רק בחלקם?",
+        "מה המשמעות הקלינית של שינוי זה בכרומוזום {chromosome_number}?",
+    ],
+}
+
 
 def _resolve_chromosome_followup(
     text: str,
@@ -1689,6 +1743,7 @@ def _resolve_chromosome_followup(
             return {
                 "sub_intent": sub_intent,
                 "chromosome_number": session_context.get("chromosome_number"),
+                "finding_type": sub_intent,  # Part I: finding_type IS the sub_intent
             }
     return None
 
@@ -1834,17 +1889,34 @@ def _build_chromosome_education_answer(
     Return a chromosomal/cytogenetic educational answer.
 
     Main answer: always the deterministic KB entry (never replaced by a draft).
+    When chromosome_number is known (from context or question), a context-specific
+    opener is prepended so the answer explicitly references the relevant chromosome
+    (Part H).  Clinician questions are also adapted to mention the chromosome (Part J).
+
     Supplemental draft card: optional AI expansion shown in immediate mode;
     approved chromosome drafts are also supplemental (not main-answer replacements).
-
-    chromosome_number: optional number (e.g. '21') retained from session context
-    for follow-up routing.  Included in metadata so the frontend can pass it
-    back on the next turn.
     """
+    # Extract/confirm chromosome number early so it informs both answer text and
+    # clinician questions (Part H: chromosome number used in answer text).
+    _chr_number = chromosome_number or _extract_chromosome_number(question)
+
     kb_entry = _CYTOGENETIC_KB.get(sub_intent) or _CYTOGENETIC_KB["chromosome_finding_general"]
     main_answer = kb_entry["answer_he"]
     suggested = kb_entry.get("suggested_questions", _CHROMOSOME_EDUCATION_SUGGESTED_QUESTIONS_DEFAULT)
-    clinician_qs = kb_entry.get("clinician_questions", [])
+    clinician_qs = list(kb_entry.get("clinician_questions", []))
+
+    # When chromosome_number is known and sub_intent has a specific opener, prepend it
+    # so the answer explicitly mentions the chromosome the patient asked about (Part H).
+    if _chr_number and sub_intent in _CHROMOSOME_CONTEXT_OPENERS:
+        opener = _CHROMOSOME_CONTEXT_OPENERS[sub_intent].format(chromosome_number=_chr_number)
+        main_answer = opener + "\n\n" + main_answer
+
+    # Use context-aware clinician questions when chromosome_number is known (Part J).
+    if _chr_number and sub_intent in _CHROMOSOME_CONTEXT_CLINICIAN_QUESTIONS:
+        clinician_qs = [
+            q.format(chromosome_number=_chr_number)
+            for q in _CHROMOSOME_CONTEXT_CLINICIAN_QUESTIONS[sub_intent]
+        ]
 
     # Optional AI draft expansion (supplemental only).
     _chr_draft_debug: dict = {}
@@ -1899,9 +1971,6 @@ def _build_chromosome_education_answer(
         except Exception:
             pass
 
-    # Extract chromosome number from question if not already supplied by context.
-    _chr_number = chromosome_number or _extract_chromosome_number(question)
-
     result: dict = {
         "answer": main_answer,
         "safety_level": "general_information",
@@ -1954,6 +2023,29 @@ MANDATORY RULES — violating any rule causes your response to be discarded:
 Supplied context for gene {gene}:
 {context}"""
 
+# Association-only prompt — used when only ClinVar phenotype associations are available.
+# The LLM may state that the gene is associated with conditions but must NOT add
+# biological function, enzyme activity, protein products, or molecular mechanisms.
+_SOURCE_GROUNDED_ASSOCIATION_SYSTEM_PROMPT = """\
+You are a genetic counseling educational assistant. Write 1-2 patient-friendly Hebrew
+sentences about gene {gene} based ONLY on the disease associations listed below.
+
+MANDATORY RULES — violating any rule causes your response to be discarded:
+1. Use ONLY the condition names listed in "ClinVar reported associations" below.
+   Do NOT describe molecular function, enzyme activity, protein products,
+   metabolic pathways, or biological mechanisms — that data is not supplied.
+2. State only that the gene has been associated with certain medical conditions.
+   Pattern: "{gene} קשור למספר מצבים רפואיים, כולל [condition1] ו-[condition2]."
+3. Do NOT give risk estimates, prognosis, treatment, or surveillance recommendations.
+4. Do NOT use personal pronouns directed at the patient (e.g. 'שלך', 'שלכם').
+5. End with one sentence directing the patient to consult their genetics team.
+6. Maximum 60 words. Write in Hebrew only.
+7. If the associations are too few or too generic for a meaningful answer,
+   respond with the single word: INSUFFICIENT_CONTEXT
+
+Supplied associations for gene {gene}:
+{context}"""
+
 # Terms that indicate the LLM fabricated biological mechanism beyond supplied facts.
 # Used to validate grounded output when context contains no molecular biology.
 _FABRICATED_BIOLOGY_PATTERNS = re.compile(
@@ -1969,50 +2061,66 @@ def _has_sufficient_grounded_gene_context(
     clinvar_summary: "Optional[dict]",
 ) -> "tuple[bool, list]":
     """
-    Return (has_biology_evidence, context_parts) for source-grounded gene phrasing.
+    Return (has_sufficient_local_source, context_parts) for source-grounded gene phrasing.
 
-    Session 27.8.1 Part A tightened rules:
-    SOURCE_GROUNDED_PHRASING requires EXPLICIT biology evidence in the supplied
-    context.  Phenotype associations and ClinVar counts alone cannot support
-    biological-role claims and are therefore NOT sufficient for grounded classification.
+    Session 27.8.2 Parts C/D update:
+    - Layer 2.5: gene_knowledge draft biology text (approved=False records) is now
+      included as a biology source.  These are curated project texts awaiting physician
+      approval — they supply factual context for LLM phrasing without being served raw.
+    - Phenotype associations (≥3 non-trivial) now qualify for an association-only
+      grounded answer.  The generation function uses a restricted association-only
+      prompt when only phenotypes are present.  Biology mechanism claims remain
+      forbidden in that path.
 
     Evidence classes:
       curated_gene_description  — physician-approved patient summary; has_biology=True
       approved_context          — physician-approved ClinVar context summary; has_biology=True
+      draft_biology_text        — gene_knowledge draft text (approved=False); has_biology=True
       phenotype_associations    — ClinVar phenotype names; has_biology=False
-                                  (may support association wording only, not mechanisms)
-      clinvar_counts            — variant counts; has_biology=False; never sufficient
+                                  (association wording only — no mechanisms or functions)
+      clinvar_counts            — variant counts; has_biology=False; never sufficient alone
 
-    The function returns True only when at least one biology part is present.
-    ClinVar phenotypes are included in context_parts for reference/debugging but
-    do NOT set the True return value.
+    Returns True when:
+      - at least one biology part is present (curated, approved_context, or draft), OR
+      - at least one phenotype_associations part is present (≥3 non-trivial phenotypes).
     """
     context_parts: list = []
 
     # 1. Physician-approved patient summary — explicit curated gene biology.
-    #    Note: genes with this summary are normally served in Tier 1b before reaching
-    #    Tier 2, so this will only apply in unusual cases (e.g. index-available but
-    #    gene_cards missing, with an approved gene_knowledge record).
     gk_patient = gene_knowledge.get_gene_patient_summary(gene)
     if gk_patient and len(gk_patient.strip()) > 30:
         context_parts.append({
             "type": "curated_gene_description",
             "text": gk_patient.strip(),
             "has_biology": True,
+            "approved": True,
         })
 
-    # 2. Physician-approved ClinVar context summary — approved context.
+    # 2. Physician-approved ClinVar context summary.
     gk_context = gene_knowledge.get_gene_context_summary(gene)
     if gk_context and len(gk_context.strip()) > 30:
         context_parts.append({
             "type": "approved_context",
             "text": gk_context.strip(),
             "has_biology": True,
+            "approved": True,
         })
 
+    # 2.5 Gene Knowledge draft biology text — curated project text, pending physician
+    #     approval for direct patient-facing serving.  Supplied as LLM input context only.
+    #     Only added when no approved biology text was found in layers 1 or 2.
+    if not any(p.get("has_biology") for p in context_parts):
+        draft_bio = gene_knowledge.get_gene_knowledge_biology_text(gene)
+        if draft_bio:
+            context_parts.append({
+                "type": "draft_biology_text",
+                "text": draft_bio,
+                "has_biology": True,
+                "approved": False,
+            })
+
     # 3. ClinVar phenotypes — association evidence only; NEVER qualifies as biology.
-    #    Included in context_parts for reference; has_biology=False so the caller
-    #    knows no biology claims are allowed.
+    #    Included for association-only grounded answers (≥3 non-trivial phenotypes).
     if clinvar_summary:
         _TRIVIAL = frozenset({
             "not specified", "not provided", "see cases", "not applicable",
@@ -2029,10 +2137,11 @@ def _has_sufficient_grounded_gene_context(
                 "has_biology": False,
             })
 
-    # Sufficient for SOURCE_GROUNDED_PHRASING only when at least one biology part
-    # is present.  Phenotype-only context → returns False.
+    # Sufficient when at least one biology part OR at least one phenotype association
+    # part is present.  Counts alone never qualify (neither biology nor association).
     has_biology = any(p.get("has_biology") for p in context_parts)
-    return has_biology, context_parts
+    has_associations = any(p.get("type") == "phenotype_associations" for p in context_parts)
+    return has_biology or has_associations, context_parts
 
 
 def _generate_source_grounded_gene_answer(
@@ -2054,24 +2163,28 @@ def _generate_source_grounded_gene_answer(
         if isinstance(_debug, dict):
             _debug.update(kw)
 
-    # Validate: only proceed when biology evidence is present.
-    # phenotype_associations alone (has_biology=False) must never reach here
-    # because _has_sufficient_grounded_gene_context() should have returned False.
+    # Determine what evidence is available and choose appropriate prompt.
+    # Session 27.8.2: phenotype-only context is now allowed via association-only prompt.
     has_biology = any(p.get("has_biology") for p in context_parts)
-    if not has_biology:
-        _dbg(attempted=False, reason="no_biology_evidence")
+    has_associations = any(p.get("type") == "phenotype_associations" for p in context_parts)
+
+    if not has_biology and not has_associations:
+        _dbg(attempted=False, reason="no_grounded_evidence")
         return None
+
+    # Biology prompt when biology context is present; association-only when phenotypes only.
+    use_biology_prompt = has_biology
+    _dbg(prompt_type="biology_grounded" if use_biology_prompt else "association_only")
 
     context_lines: list = []
     for part in context_parts:
         ptype = part.get("type")
-        if ptype == "curated_gene_description":
-            context_lines.append(f"Approved gene description: {part['text']}")
+        if ptype in ("curated_gene_description", "draft_biology_text"):
+            label = "Approved gene description" if ptype == "curated_gene_description" else "Gene biology context"
+            context_lines.append(f"{label}: {part['text']}")
         elif ptype == "approved_context":
             context_lines.append(f"Physician-approved context: {part['text']}")
         elif ptype == "phenotype_associations":
-            # Association evidence — still supplied so the LLM can reference
-            # disease names, but molecular claims are forbidden by the prompt.
             phenotypes = part.get("phenotypes", [])
             context_lines.append(f"ClinVar reported associations: {', '.join(phenotypes)}")
 
@@ -2079,9 +2192,11 @@ def _generate_source_grounded_gene_answer(
         return None
 
     context_text = "\n".join(context_lines)
-    system_prompt = _SOURCE_GROUNDED_GENE_SYSTEM_PROMPT.format(
-        gene=gene, context=context_text
+    prompt_template = (
+        _SOURCE_GROUNDED_GENE_SYSTEM_PROMPT if use_biology_prompt
+        else _SOURCE_GROUNDED_ASSOCIATION_SYSTEM_PROMPT
     )
+    system_prompt = prompt_template.format(gene=gene, context=context_text)
     user_content = (
         f"Gene: {gene}\n"
         f"Task: Write 2-3 patient-friendly Hebrew sentences about this gene "
@@ -2114,11 +2229,14 @@ def _generate_source_grounded_gene_answer(
         if sum(1 for c in text if "א" <= c <= "ת") < 20:
             _dbg(generated=False, reason="insufficient_hebrew")
             return None
-        # Detect fabricated biological mechanism claims not present in supplied context.
-        # If the output contains molecular/pathway terms that don't appear in the
-        # supplied context, reject it — the LLM has added knowledge beyond the context.
-        context_text_lower = context_text.lower()
+        # For association-only answers: biology terms in the output are fabricated
+        # (the prompt forbids them).  Reject outright if any appear.
+        # For biology-grounded answers: reject only if the terms don't appear in context.
         if _FABRICATED_BIOLOGY_PATTERNS.search(text):
+            if not use_biology_prompt:
+                _dbg(generated=False, reason="fabricated_biology_in_association_answer")
+                return None
+            context_text_lower = context_text.lower()
             found_terms = _FABRICATED_BIOLOGY_PATTERNS.findall(text)
             unsupported = [t for t in found_terms
                            if t.lower() not in context_text_lower]
@@ -5243,6 +5361,16 @@ def _build_session_context_out(
     sub_intent = chr_meta.get("sub_intent")
     if sub_intent and sub_intent in _SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS:
         ctx_out["normalized_intent"] = sub_intent
+
+    # finding_type — specific chromosome finding type, persisted across turns (Part I).
+    # "chromosome_finding_general" is the base/unresolved category; finding_type is only
+    # set when a specific finding (deletion, duplication, etc.) is identified.
+    if sub_intent and sub_intent in _CHROMOSOME_TOPIC_INTENTS and sub_intent != "chromosome_finding_general":
+        ctx_out["finding_type"] = sub_intent
+    elif matched in _CHROMOSOME_TOPIC_INTENTS and session_context:
+        prev_finding = session_context.get("finding_type")
+        if prev_finding and prev_finding in _CHROMOSOME_TOPIC_INTENTS:
+            ctx_out["finding_type"] = prev_finding
 
     # Gene symbol from gene metadata — alphanumeric only.
     gene_meta = result.get("gene_metadata") or {}

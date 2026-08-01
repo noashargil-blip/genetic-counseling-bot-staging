@@ -139,6 +139,25 @@ def get_gene_context_summary(gene_symbol: str) -> Optional[str]:
     return None
 
 
+def get_gene_knowledge_biology_text(gene_symbol: str) -> Optional[str]:
+    """
+    Return the patient_summary_he text for a gene, regardless of approved status.
+
+    Used ONLY for source-grounded phrasing — the LLM receives this as supplied
+    context and produces a phrased summary.  The raw text is never served directly
+    as a patient-facing answer (that path requires approved=True via
+    get_gene_patient_summary()).
+
+    Returns None when the gene has no record or the text is too short to be
+    useful as grounding context (< 30 characters).
+    """
+    record = _RECORDS.get(gene_symbol.upper())
+    if not record:
+        return None
+    text = (record.get("patient_summary_he") or "").strip()
+    return text if len(text) > 30 else None
+
+
 def list_approved_genes() -> list[str]:
     """Return sorted list of all genes with approved=True records."""
     return sorted(sym for sym, r in _RECORDS.items() if r.get("approved") is True)

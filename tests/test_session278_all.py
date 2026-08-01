@@ -81,24 +81,29 @@ class TestGroundedContextSufficiency:
         has, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
         assert has is False
 
-    def test_phenotype_only_not_sufficient_for_biology(self):
-        """Session 27.8.1 Part A: phenotypes alone cannot qualify as source-grounded biology."""
+    def test_phenotype_only_sufficient_for_association_answer(self):
+        """Session 27.8.2 Part D: 3+ phenotypes qualify for association-only grounded answer."""
         summary = {"phenotypes": ["Alzheimer disease", "Lipoprotein disorder", "Cardiovascular disease"]}
         has, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
-        assert has is False, (
-            "3 phenotype names alone must NOT qualify as grounded biology evidence"
+        assert has is True, (
+            "3 phenotype names qualify for an association-only grounded answer (27.8.2 Part D)"
         )
-        # Phenotype entries are still in context_parts (for reference), but has_biology=False.
+        # Phenotype entries are in context_parts with has_biology=False — no biology claims.
         pheno_parts = [p for p in ctx if p.get("type") == "phenotype_associations"]
-        assert pheno_parts, "phenotype_associations should still be in context_parts"
+        assert pheno_parts, "phenotype_associations should be in context_parts"
         assert pheno_parts[0].get("has_biology") is False
+        # No biology parts: association-only answer must NOT claim mechanisms.
+        assert not any(p.get("has_biology") for p in ctx), (
+            "TESTGENE (not in KB) should have no biology parts — only association parts"
+        )
 
-    def test_six_phenotypes_still_not_sufficient_for_biology(self):
-        """More phenotypes still don't constitute biology evidence."""
+    def test_six_phenotypes_produce_association_only_answer(self):
+        """More phenotypes still don't constitute biology evidence, but do qualify for association answer."""
         phenotypes = [f"Disease {i}" for i in range(6)]
         summary = {"phenotypes": phenotypes}
         has, ctx = _ce._has_sufficient_grounded_gene_context("TESTGENE", summary)
-        assert has is False, "Six phenotypes alone must not qualify as grounded biology evidence"
+        assert has is True, "Six phenotypes qualify for association-only grounded answer (27.8.2)"
+        assert not any(p.get("has_biology") for p in ctx), "Still no biology evidence from phenotypes"
 
     def test_sufficient_with_approved_context_summary(self):
         """Approved ClinVar context summary (approved_context type) qualifies as biology."""
@@ -736,42 +741,48 @@ class TestGroundingEvidenceClassification:
             assert bio is not None
             assert bio["has_biology"] is True
 
-    def test_no_biology_evidence_never_grounded(self):
-        """Genes reaching Tier 2 with only ClinVar phenotypes cannot be grounded."""
+    def test_no_local_kb_phenotype_only_is_association_grounded(self):
+        """Session 27.8.2 Part D: when no local biology KB data exists, phenotypes qualify for association answer."""
         summary = {"phenotypes": ["Breast cancer", "Ovarian cancer", "Prostate cancer"]}
         with patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
-             patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
+             patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_knowledge_biology_text", return_value=None):
             has, ctx = _ce._has_sufficient_grounded_gene_context("BRCA1", summary)
-            assert has is False
+            assert has is True, "Phenotype-only now qualifies for association-only grounded answer"
+            assert not any(p.get("has_biology") for p in ctx), "No biology evidence present"
 
-    def test_apoe_without_biology_source_not_grounded(self):
-        """APOE: when only ClinVar phenotypes are available, grounded=False."""
+    def test_apoe_phenotype_only_produces_association_grounded_answer(self):
+        """APOE: phenotype-only ClinVar qualifies for association-only answer (not biology). (27.8.2 Part D)"""
         summary = {"phenotypes": [
             "Alzheimer disease", "Lipoprotein disorder", "Cardiovascular disease",
         ]}
         with patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
-            has, _ = _ce._has_sufficient_grounded_gene_context("APOE", summary)
-            assert has is False, (
-                "APOE without approved biology context must not be classified as source-grounded"
+            has, ctx = _ce._has_sufficient_grounded_gene_context("APOE", summary)
+            assert has is True, (
+                "APOE phenotypes qualify for association-only grounded answer (27.8.2)"
             )
+            pheno = next((p for p in ctx if p.get("type") == "phenotype_associations"), None)
+            assert pheno is not None
+            assert pheno["has_biology"] is False
 
-    def test_ccr5_without_biology_source_not_grounded(self):
-        """CCR5: same rule applies — phenotype-only context is not sufficient."""
+    def test_ccr5_phenotype_only_produces_association_grounded_answer(self):
+        """CCR5: same rule applies — phenotype-only qualifies for association answer. (27.8.2 Part D)"""
         summary = {"phenotypes": ["HIV infection", "West Nile virus infection", "Malaria"]}
         with patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "get_gene_context_summary", return_value=None):
-            has, _ = _ce._has_sufficient_grounded_gene_context("CCR5", summary)
-            assert has is False
+            has, ctx = _ce._has_sufficient_grounded_gene_context("CCR5", summary)
+            assert has is True, "CCR5 phenotypes qualify for association-only grounded answer (27.8.2)"
+            assert not any(p.get("has_biology") for p in ctx)
 
-    def test_generate_grounded_rejects_phenotype_only_context(self):
-        """_generate_source_grounded_gene_answer must refuse phenotype-only context."""
+    def test_generate_grounded_association_only_returns_none_without_llm(self):
+        """With phenotype-only context and no LLM configured, generator returns None (LLM missing)."""
         phenotype_only_parts = [
             {"type": "phenotype_associations", "phenotypes": ["A", "B", "C"], "has_biology": False}
         ]
         result = _ce._generate_source_grounded_gene_answer("TESTGENE", phenotype_only_parts)
         assert result is None, (
-            "Grounded generator must return None when only phenotype evidence is supplied"
+            "Generator must return None when LLM is not configured, regardless of context type"
         )
 
     def test_fabricated_biology_constant_exists(self):
