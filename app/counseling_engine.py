@@ -93,8 +93,7 @@ _GENE_PATTERNS = [
 VUS_KNOWN_GENE_TEMPLATE_HE = (
     "כאשר מתקבל VUS בגן {gene}, המשמעות היא שזוהה שינוי גנטי, אך עדיין "
     "אין מספיק ראיות מדעיות כדי לקבוע אם הוא pathogenic או benign. "
-    "לכן אין להסיק מסקנות אישיות או לקבל החלטות רפואיות רק על סמך VUS. "
-    "המידע כללי ואינו מחליף ייעוץ רפואי אישי."
+    "לכן אין להסיק מסקנות אישיות או לקבל החלטות רפואיות רק על סמך VUS."
 )
 
 
@@ -227,7 +226,6 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
     entry = kb.get_by_id("vus_known_gene")
     suggested = list(entry.get("suggested_questions", [])) if entry else list(_GENE_SUGGESTED_QUESTIONS)  # noqa: F821
 
-    parts.append(_GENE_SUMMARY_SAFETY_NOTE_HE)
     deterministic = "\n\n".join(parts)
     # Curated VUS+gene answers are always deterministic.
 
@@ -431,6 +429,46 @@ def _build_helpful_fallback(question: str) -> dict:
         "llm_used": False,
         "fallback_used": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Referral/disclaimer policy (Session 27.9 Part E)
+# ---------------------------------------------------------------------------
+
+def _should_include_clinical_referral(
+    intent: str = "",
+    is_personal: bool = False,
+    asks_for_action: bool = False,
+    asks_for_interpretation: bool = False,
+    requires_report_details: bool = False,
+) -> bool:
+    """
+    Return True only when referral language is genuinely warranted.
+
+    Referral IS appropriate when at least one of:
+    - personal result interpretation is requested (is_personal)
+    - exact report/variant/coordinates are required (requires_report_details)
+    - medical decision or next clinical action is requested (asks_for_action)
+    - personal risk/prognosis (covered by is_personal)
+    - the answer cannot be completed without clinician-held information
+
+    Referral is NOT appropriate for:
+    - general gene descriptions
+    - general chromosome concepts
+    - animal-genetics questions
+    - basic inheritance explanations
+    - general definitions
+    - low-risk factual questions
+    - source-grounded educational answers
+    """
+    if is_personal or asks_for_action or asks_for_interpretation or requires_report_details:
+        return True
+    _personal_intents = {
+        "personal_high_stakes", "surgery_decision", "reproductive_block",
+        "specific_variant",
+    }
+    return intent in _personal_intents
+
 
 # ---------------------------------------------------------------------------
 # Specific-variant evidence summary
@@ -1427,14 +1465,19 @@ _CHROMOSOME_FINDING_GENERAL_RE = re.compile(
 _CYTOGENETIC_KB: dict = {
     "chromosome_finding_general": {
         "answer_he": (
-            "כשמדברים על \"בעיה בכרומוזום\", הכוונה יכולה להיות לסוגים שונים של ממצאים:\n\n"
+            "כשמדברים על \"שינוי בכרומוזום\", הכוונה יכולה להיות לסוגים שונים של ממצאים:\n\n"
             "• שינוי במספר הכרומוזומים — כרומוזום עודף (טריזומיה) או חסר (מונוזומיה).\n"
             "• שינוי במבנה הכרומוזום — מחיקה (חסרה של קטע), כפילות (הכפלה של קטע), "
             "או טרנסלוקציה (קטע שעבר מכרומוזום אחד לאחר).\n"
             "• ממצא פסיפס (מוזאיקה) — שינוי קיים רק בחלק מהתאים.\n\n"
-            "המשמעות תלויה לחלוטין בסוג הממצא המדויק ובמיקומו. "
-            "לא ניתן לקבוע את המשמעות הקלינית רק לפי ה\"כרומוזום\" שצוין — נדרש פירוט מלא של הדוח. "
-            "הצוות הגנטי שבדק אתכם הוא הגורם המתאים להסביר את המשמעות הספציפית של הממצא."
+            "המשמעות תלויה לחלוטין בסוג הממצא המדויק, במיקומו, בגודלו, "
+            "ובסוג הבדיקה שנעשתה.\n\n"
+            "מה כדאי לברר מהסיכום או מהדוח?\n"
+            "• מה סוג הממצא — עודף כרומוזום, חסר, מחיקה, כפילות, או שינוי מבני אחר?\n"
+            "• האם מדובר בכרומוזום שלם או בקטע ממנו?\n"
+            "• מה גודל הממצא, ואילו גנים ידועים כלולים?\n"
+            "• האם הממצא אושש בבדיקה נוספת?\n"
+            "• מה סוג הבדיקה שגילתה את הממצא — סקר, אבחנה, קריוטיפ, מיקרואריי?"
         ),
         # Bot-clickable educational follow-up questions
         "suggested_questions": [
@@ -1660,6 +1703,11 @@ _CHROMOSOME_FOLLOWUP_PATTERNS: list = [
 # Context-aware openers prepended to the KB answer when chromosome_number is known (Part H).
 # Directly addresses the chromosome the patient mentioned rather than being fully generic.
 _CHROMOSOME_CONTEXT_OPENERS: dict = {
+    "chromosome_finding_general": (
+        "כרומוזום {chromosome_number} הוא אחד מהכרומוזומים האנושיים ומכיל גנים רבים. "
+        "\"שינוי בכרומוזום {chromosome_number}\" יכול להתייחס לסוגים שונים של ממצאים — "
+        "מחיקה, כפילות, שינוי במספר העותקים, טרנסלוקציה, או ממצא פסיפס."
+    ),
     "chromosome_deletion_general": (
         "אם הכוונה היא למחיקה בכרומוזום {chromosome_number}, "
         "מדובר בחסר של קטע מסוים מכרומוזום {chromosome_number}."
@@ -1684,6 +1732,11 @@ _CHROMOSOME_CONTEXT_OPENERS: dict = {
 
 # Context-aware clinician questions when chromosome_number is known (Part J).
 _CHROMOSOME_CONTEXT_CLINICIAN_QUESTIONS: dict = {
+    "chromosome_finding_general": [
+        "מה סוג הממצא שנמצא בכרומוזום {chromosome_number} — עודף, חסר, מחיקה, כפילות, או שינוי מבני?",
+        "האם הממצא בכרומוזום {chromosome_number} קיים בכל התאים או רק בחלקם?",
+        "מה המשמעות הקלינית של הממצא הספציפי בכרומוזום {chromosome_number}?",
+    ],
     "chromosome_deletion_general": [
         "מה הגודל והמיקום המדויק של המחיקה בכרומוזום {chromosome_number}?",
         "האם המחיקה בכרומוזום {chromosome_number} כוללת גנים ידועים?",
@@ -1869,10 +1922,14 @@ def _generate_chromosome_education_draft(
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "review_status": "pending",
             "approved": False,
-            "warning_he": (
-                "טיוטה זו נוצרה על ידי בינה מלאכותית ולא נבדקה על ידי מומחה גנטי. "
-                "תוכנה עשוי להיות כללי מדי או לא מותאם לממצא הספציפי שלך."
-            ),
+            # Session 27.9 Part I: updated patient-facing pending warning (short)
+            "warning_he": "הסבר זה נוצר באמצעות AI וטרם נבדק על ידי הצוות הגנטי.",
+            # Expansion label shown in UI card header
+            "expansion_label": "הסבר נוסף שנוצר באמצעות AI",
+            # ai_content_type for policy routing
+            "ai_content_type": "medical_educational_ai_expansion",
+            "intended_use": "supplemental_medical_expansion",
+            "risk_class": "medical_educational",
         }
     except Exception as exc:
         logger.debug("chromosome draft generation failed: %s", type(exc).__name__)
@@ -1955,6 +2012,7 @@ def _build_chromosome_education_answer(
         )
 
     # Auto-enqueue new draft to physician review DB (non-blocking; never raises).
+    # Session 27.9 Part J: add risk_class and intended_use to create_draft metadata.
     if chr_draft_available and chr_draft:
         try:
             from app import review_db as _rdb
@@ -1965,8 +2023,13 @@ def _build_chromosome_education_answer(
                 normalized_intent=sub_intent,
                 model_provider=_chr_draft_debug.get("provider"),
                 model_name=chr_draft.get("generated_by_model"),
-                prompt_version="s277",
-                source_metadata={"sub_intent": sub_intent},
+                prompt_version="s279",
+                source_metadata={
+                    "sub_intent": sub_intent,
+                    "ai_content_type": "medical_educational_ai_expansion",
+                    "risk_class": "medical_educational",
+                    "intended_use": "supplemental_medical_expansion",
+                },
             )
         except Exception:
             pass
@@ -1991,6 +2054,10 @@ def _build_chromosome_education_answer(
             "approved_draft_promoted": False,  # always False for chromosome education
             # Retained for session-context follow-up routing (Part F).
             "chromosome_number_detected": _chr_number,
+            # Session 27.9 Part I: UI label for the supplemental card
+            "expansion_label_pending": "הסבר נוסף שנוצר באמצעות AI",
+            "expansion_label_approved": "מידע נוסף שנבדק ואושר",
+            "expansion_pending_warning": "הסבר זה נוצר באמצעות AI וטרם נבדק על ידי הצוות הגנטי.",
         },
     }
     if chr_draft_available:
@@ -2015,7 +2082,8 @@ MANDATORY RULES — violating any rule causes your response to be discarded:
    appear word-for-word in the supplied context.
 2. Do NOT give risk estimates, prognosis, treatment, or surveillance recommendations.
 3. Do NOT use personal pronouns directed at the patient (e.g. 'שלך', 'שלכם').
-4. End with one sentence directing the patient to consult their genetics team.
+4. Do NOT add a generic referral sentence such as 'לפנות לצוות הגנטי' or
+   'המידע כללי ואינו מחליף ייעוץ רפואי'. End the answer naturally.
 5. Maximum 100 words. Write in Hebrew only.
 6. If the context is insufficient for a meaningful patient-facing answer,
    respond with the single word: INSUFFICIENT_CONTEXT
@@ -2038,7 +2106,9 @@ MANDATORY RULES — violating any rule causes your response to be discarded:
    Pattern: "{gene} קשור למספר מצבים רפואיים, כולל [condition1] ו-[condition2]."
 3. Do NOT give risk estimates, prognosis, treatment, or surveillance recommendations.
 4. Do NOT use personal pronouns directed at the patient (e.g. 'שלך', 'שלכם').
-5. End with one sentence directing the patient to consult their genetics team.
+5. Do NOT add a generic referral sentence such as 'לפנות לצוות הגנטי' or
+   'המידע כללי ואינו מחליף ייעוץ רפואי'. End the answer naturally after
+   stating the associations.
 6. Maximum 60 words. Write in Hebrew only.
 7. If the associations are too few or too generic for a meaningful answer,
    respond with the single word: INSUFFICIENT_CONTEXT
@@ -3254,6 +3324,27 @@ _GENERAL_EDU_EXTRA_BLOCK_PHRASES: tuple = (
 )
 
 
+# Non-human biology organism signals — these questions are always low-risk general education
+# (e.g. "כמה גנים יש לצב ים?", "כמה כרומוזומים יש לכלב?").
+_NON_HUMAN_BIOLOGY_ORGANISMS = frozenset([
+    "צב ים", "צב", "כלב", "חתול", "דג", "דגים", "ציפור", "שימפנזה", "קוף", "קופ",
+    "עכבר", "עכברים", "חיידק", "חיידקים", "וירוס", "וירוסים", "צמח", "צמחים",
+    "dog", "cat", "fish", "bird", "mouse", "bacteria", "virus", "plant",
+    "chimpanzee", "turtle", "sea turtle",
+])
+
+# Broad genetics vocabulary that is always educational (not personal/clinical)
+_BROAD_GENETICS_EDU_SIGNALS = frozenset([
+    "כמה גנים", "כמה כרומוזומים", "כמה בסיסים", "כמה נוקלאוטידים",
+    "גן לאלל", "מה זה אלל", "מה הם אללים",
+    "מוטציה סומטית", "מוטציה נבטית", "מוטציה גרמינלית",
+    "מהו גנום", "מה זה גנום", "מה הגנום", "מהי גנומיקה",
+    "שני עותקים של", "שני כרומוזומים", "כרומוזום הומולוגי",
+    "dna ל-rna", "dna ל rna", "dna לrna",
+    "how many genes", "how many chromosomes",
+])
+
+
 def _classify_general_question(question: str) -> str:
     """
     Classify a question that didn't match any KB entry.
@@ -3274,6 +3365,19 @@ def _classify_general_question(question: str) -> str:
         if phrase in lower:
             return "personal_or_high_stakes"
 
+    # Non-human biology or broad genetics vocabulary → always safe general education
+    for signal in _NON_HUMAN_BIOLOGY_ORGANISMS:
+        if signal in lower:
+            return "safe_general_education"
+    for signal in _BROAD_GENETICS_EDU_SIGNALS:
+        if signal in lower:
+            return "safe_general_education"
+    # "כמה" + biology term at start (not personal) — e.g. "כמה גנים יש לצב ים?"
+    if lower.startswith("כמה ") and any(
+        word in lower for word in ["גנים", "כרומוזומים", "בסיסים", "נוקלאוטידים", "חלבונים", "אללים"]
+    ):
+        return "safe_general_education"
+
     # Positive educational-intent check
     for phrase in _GENERAL_EDU_INTENT_PHRASES:
         if lower.startswith(phrase) or f" {phrase}" in lower:
@@ -3290,8 +3394,12 @@ _GENERAL_EDUCATION_SYSTEM_PROMPT = (
     "food, sports, etc.) — output a single dash (-) only.\n\n"
     "TASK: ענה בעברית פשוטה, ב-2 עד 5 משפטים קצרים בלבד. "
     "Explain the genetics or biology concept clearly and concisely.\n\n"
+    "UNCERTAINTY: When the scientific estimate is not exact (e.g. gene count varies by "
+    "species or assembly), use cautious phrasing such as 'ההערכה הנוכחית היא...' or "
+    "'מספר הגנים משתנה בין מינים ועשוי להגיע ל-...' — do NOT invent precise numbers.\n\n"
     "ALLOWED:\n"
     "  - General biological or medical concept explanations\n"
+    "  - Non-human biology (sea turtle gene count, dog chromosomes, etc.)\n"
     "  - Disease category definitions (general, not personal)\n"
     "  - English biomedical terms when needed (mismatch repair, penetrance, "
     "beta-globin, etc.)\n"
@@ -3305,6 +3413,7 @@ _GENERAL_EDUCATION_SYSTEM_PROMPT = (
     "  - Personal risk estimates or 'you should...' instructions\n"
     "  - Urgent clinical instructions\n"
     "  - Referral phrases (do not add 'יש לפנות לצוות הגנטי' or similar)\n"
+    "  - Generic disclaimers ('המידע כללי ואינו מחליף ייעוץ רפואי')\n"
     "  - Question marks, emoji, or ClinVar statistics\n\n"
     "FORMAT:\n"
     "  - Hebrew mainly; English biomedical terms allowed.\n"
@@ -3419,6 +3528,10 @@ def _build_general_education_answer(question: str) -> "tuple[Optional[dict], dic
     Generate and return (result_dict_or_None, ai_debug).
     ai_debug is ALWAYS returned so callers can attach it to the fallback
     response — staging responses must always include ai_general_debug.
+
+    Session 27.9 Part B: GENERAL_LOW_RISK_AI class — no physician review required,
+    no unverified-AI label shown to the patient, no generic disclaimer, no queue entry.
+    The question classifier already blocked personal/high-stakes questions upstream.
     """
     text, ai_debug = _generate_general_education_draft(question)
     if not text:
@@ -3433,12 +3546,9 @@ def _build_general_education_answer(question: str) -> "tuple[Optional[dict], dic
         "llm_used": True,
         "fallback_used": False,
         "llm_mode": "general_education_draft",
-        "unverified_general_draft": {
-            "status": "ai_generated_unreviewed",
-            "text_he": text,
-            "warning_he": _GENERAL_EDUCATION_WARNING_HE,
-            "source_note_he": _GENERAL_EDUCATION_SOURCE_NOTE_HE,
-        },
+        # ai_content_type = GENERAL_LOW_RISK_AI: no physician review, no queue entry
+        "ai_content_type": "general_low_risk_ai",
+        "requires_physician_review": False,
         "ai_general_debug": ai_debug,
     }, ai_debug
 
@@ -4131,8 +4241,6 @@ def _build_gene_clinvar_deterministic_answer(gene: str, summary: dict) -> str:
         if len(clean_phenotypes) > 8:
             lines.append(f"(ועוד {len(clean_phenotypes) - 8} מצבים נוספים במאגר)")
 
-    lines.append("")
-    lines.append(_GENE_SUMMARY_SAFETY_NOTE_HE)
     return "\n".join(lines)
 
 
@@ -4372,8 +4480,7 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     tier2_fallback_answer = (
         _correction_prefix_t2 +
         f"עדיין אין לי סיכום ביולוגי זמין לגן {gene}. "
-        f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע. "
-        f"לשאלות ספציפיות, פנה לצוות הגנטי שטיפל בך."
+        f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע."
     )
     suggested = _gene_suggested_questions(question, gene)
 
