@@ -718,6 +718,8 @@ def version():
     llm      = _health_module.check_llm()
     return {
         "app_version":                    _health_module.APP_VERSION,
+        "session_version":                _health_module.SESSION_VERSION,
+        "prompt_version":                 _health_module.PROMPT_VERSION,
         "safety_policy_version":          _health_module.SAFETY_POLICY_VERSION,
         "llm_policy_version":             _health_module.LLM_POLICY_VERSION,
         "data_version":                   _health_module.load_data_version(),

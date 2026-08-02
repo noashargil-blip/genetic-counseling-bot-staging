@@ -1499,8 +1499,7 @@ _CYTOGENETIC_KB: dict = {
             "או גדולה יותר (נראית בקריוטיפ).\n\n"
             "ההשפעה הקלינית תלויה בגודל המחיקה ובמיקומה — אילו גנים כלולים בקטע החסר. "
             "מחיקות קטנות בגנים לא-קריטיים עלולות להיות חסרות משמעות קלינית, "
-            "בעוד שמחיקות גדולות יותר או במיקומים רגישים עשויות להיות קשורות לתסמינים שונים.\n\n"
-            "הצוות הגנטי שטיפל בכם יסביר את המשמעות של המחיקה הספציפית שנמצאה."
+            "בעוד שמחיקות גדולות יותר או במיקומים רגישים עשויות להיות קשורות לתסמינים שונים."
         ),
         "suggested_questions": [
             "מה ההבדל בין מחיקה לבין כפילות כרומוזומית?",
@@ -1518,8 +1517,7 @@ _CYTOGENETIC_KB: dict = {
             "בניגוד למחיקה (חסר), בכפילות יש חומר גנטי עודף.\n\n"
             "ההשפעה הקלינית תלויה בגודל הכפילות, במיקומה ובגנים שהיא כוללת. "
             "כפילות קטנות יכולות לעיתים להיות ניטרליות; כפילות גדולות יותר עשויות להיות "
-            "קשורות לביטויים שונים בהתאם לאזור הכרומוזום המדובר.\n\n"
-            "הצוות הגנטי שטיפל בכם יסביר את המשמעות של הכפילות הספציפית שנמצאה."
+            "קשורות לביטויים שונים בהתאם לאזור הכרומוזום המדובר."
         ),
         "suggested_questions": [
             "מה ההבדל בין מחיקה לבין כפילות כרומוזומית?",
@@ -1539,8 +1537,7 @@ _CYTOGENETIC_KB: dict = {
             "נשאים של טרנסלוקציה מאוזנת לרוב בריאים, אך עשויים להיות בסיכון מוגבר לבעיות בפריון "
             "או להעביר טרנסלוקציה לא מאוזנת לצאצאים.\n"
             "• טרנסלוקציה לא מאוזנת — יש חסר או עודף של חומר גנטי. "
-            "סוג זה עשוי להיות קשור לביטויים קליניים, תלוי בגנים המעורבים.\n\n"
-            "הצוות הגנטי יפרט אם הטרנסלוקציה שנמצאה מאוזנת או לא, ומה המשמעות הספציפית."
+            "סוג זה עשוי להיות קשור לביטויים קליניים, תלוי בגנים המעורבים."
         ),
         "suggested_questions": [
             "מה ההבדל בין טרנסלוקציה מאוזנת ללא מאוזנת?",
@@ -1561,8 +1558,7 @@ _CYTOGENETIC_KB: dict = {
             "• אחוז התאים הנגועים (\"אחוז המוזאיקה\").\n"
             "• אילו רקמות ואיברים מכילים את התאים המשתנים.\n\n"
             "פסיפס יכול לגרום לביטוי קל יותר בהשוואה לאותה הפרעה במצב מלא, "
-            "או לכלל ללא ביטוי קליני — אך זה משתנה מאוד מאדם לאדם ומממצא לממצא.\n\n"
-            "הצוות הגנטי יסביר את אחוז הפסיפס שנמצא ואת המשמעות הספציפית."
+            "או לכלל ללא ביטוי קליני — אך זה משתנה מאוד מאדם לאדם ומממצא לממצא."
         ),
         "suggested_questions": [
             "מה ההבדל בין ממצא מלא לבין פסיפס?",
@@ -1583,8 +1579,7 @@ _CYTOGENETIC_KB: dict = {
             "• מיקרואריי כרומוזומלי (Chromosomal Microarray / CMA) — מזהה "
             "מחיקות וכפילויות קטנות שאינן נראות בקריוטיפ. רזולוציה גבוהה הרבה יותר.\n"
             "• FISH — בדיקה ממוקדת לאזור כרומוזומי ספציפי.\n\n"
-            "הבדיקה שנבחרה לכם מותאמת לשאלה הקלינית הספציפית. "
-            "הצוות הגנטי יסביר מה הבדיקה שבוצעה, ומה הממצא אומר בהקשר שלכם."
+            "הבדיקה שנבחרה מותאמת לשאלה הקלינית הספציפית."
         ),
         "suggested_questions": [
             "מה ההבדל בין קריוטיפ לבין מיקרואריי?",
@@ -1853,8 +1848,8 @@ MANDATORY RULES — never violate:
 - Do NOT recommend surgery, treatment, surveillance, or termination.
 - Do NOT give personal risk estimates or prognosis.
 - Do NOT interpret ISCN strings, specific reports, or coordinate notation.
+- Do NOT add a generic referral sentence such as 'יש לפנות לצוות הגנטי' or 'המידע כללי'. End naturally.
 - Write in Hebrew. Maximum 3 short paragraphs.
-- End by suggesting the patient consult their genetics team for specific meaning.
 - If you cannot generate safe content, respond with: NO_SAFE_CONTENT"""
 
 _CHROMOSOME_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT = (
@@ -3329,8 +3324,10 @@ _GENERAL_EDU_EXTRA_BLOCK_PHRASES: tuple = (
 _NON_HUMAN_BIOLOGY_ORGANISMS = frozenset([
     "צב ים", "צב", "כלב", "חתול", "דג", "דגים", "ציפור", "שימפנזה", "קוף", "קופ",
     "עכבר", "עכברים", "חיידק", "חיידקים", "וירוס", "וירוסים", "צמח", "צמחים",
+    "בעלי חיים", "בעל חיים",  # without definite article
+    "בעלי החיים", "בעל החיים",  # with definite article (ה-prefix)
     "dog", "cat", "fish", "bird", "mouse", "bacteria", "virus", "plant",
-    "chimpanzee", "turtle", "sea turtle",
+    "chimpanzee", "turtle", "sea turtle", "animals",
 ])
 
 # Broad genetics vocabulary that is always educational (not personal/clinical)
@@ -3343,6 +3340,146 @@ _BROAD_GENETICS_EDU_SIGNALS = frozenset([
     "dna ל-rna", "dna ל rna", "dna לrna",
     "how many genes", "how many chromosomes",
 ])
+
+
+# ---------------------------------------------------------------------------
+# Carrier screening / ancestry-related genetic testing (Session 27.9.1 Part D)
+# ---------------------------------------------------------------------------
+
+_ANCESTRY_SIGNALS: frozenset = frozenset([
+    "אשכנזי", "אשכנזייה", "אשכנזים",
+    "ספרדי", "ספרדייה", "ספרדים",
+    "מזרחי", "מזרחייה",
+    "ממוצא",  # "of ancestry"
+    "לפי מוצא",
+])
+
+_CARRIER_SCREENING_SIGNALS_D: frozenset = frozenset([
+    "סקר נשאות",
+    "בדיקות נשאות",
+    "בדיקת נשאות",
+    "carrier screening",
+    "expanded carrier",
+    "לפני היריון",
+    "לפני הריון",
+    "pre-pregnancy",
+    "prenatal screening",
+])
+
+_CARRIER_SCREENING_TESTING_PHRASES: tuple = (
+    "איזה בדיקות גנטיות",
+    "אילו בדיקות גנטיות",
+    "בדיקות גנטיות כדאי",
+    "בדיקות גנטיות מומלצות",
+    "בדיקות גנטיות לזוג",
+    "אילו בדיקות נשאות",
+    "איזה בדיקות נשאות",
+    "בדיקות לפי מוצא",
+    "בדיקות גנטיות לפני",
+)
+
+
+def _detect_carrier_screening_intent(text: str) -> "Optional[str]":
+    """
+    Detect carrier-screening / ancestry-related genetic testing questions.
+
+    Returns:
+      'carrier_screening_personal' — personal phrasing present (what should I/we do)
+      'carrier_screening_general'  — impersonal / general question
+      None                         — no carrier-screening signal found
+
+    Fires before the KB lookup so ancestry questions never misroute to penetrance.
+    """
+    lower = text.lower()
+    has_ancestry = any(s in lower for s in _ANCESTRY_SIGNALS)
+    has_cs_signal = any(s in lower for s in _CARRIER_SCREENING_SIGNALS_D)
+    has_testing_phrase = any(p in lower for p in _CARRIER_SCREENING_TESTING_PHRASES)
+
+    if not (has_ancestry or has_cs_signal or has_testing_phrase):
+        return None
+
+    # Require a genetics/testing context word so we don't fire on unrelated uses
+    has_genetics = any(
+        w in lower
+        for w in ["גנטי", "גנטיות", "גנטיקה", "בדיקה", "בדיקות",
+                   "נשאות", "carrier", "screening", "genetic"]
+    )
+    if not has_genetics:
+        return None
+
+    _personal_forms = (
+        "אם אני", "כדאי לי", "עלי לעשות", "מה אני צריכ",
+        "שאעשה", "אם אנחנו", "כדאי לנו", "עלינו",
+        "כדאי לעשות",  # "כדאי לי לעשות" is covered by this
+    )
+    is_personal = any(p in lower for p in _personal_forms)
+    return "carrier_screening_personal" if is_personal else "carrier_screening_general"
+
+
+# Carrier-screening answer content (Session 27.9.1 Part D)
+
+_CARRIER_SCREENING_GENERAL_HE = (
+    "סקר נשאות גנטית הוא בדיקה שנועדה לזהות אנשים שנושאים שינויים גנטיים "
+    "הקשורים למחלות תורשתיות. נשאים בדרך כלל בריאים לחלוטין, אך עלולים להעביר "
+    "את השינוי לילדיהם.\n\n"
+    "פאנלים נפוצים:\n"
+    "• פאנל אשכנזי קלאסי — כולל מחלות בתדירות מוגברת בקרב יהודי אשכנז "
+    "(כגון Gaucher, Tay-Sachs, Canavan, ניוון שרירים של Duchenne בגרסה מסוימת).\n"
+    "• פאנל מורחב (Expanded Carrier Screening) — מכסה מאות מחלות ללא תלות במוצא; "
+    "כיום מוצע לכלל הזוגות.\n\n"
+    "בחירת הפאנל המתאים תלויה בהיסטוריה המשפחתית, במוצא, בהקשר הרפואי "
+    "ובהנחיות מערכת הבריאות."
+)
+
+_CARRIER_SCREENING_PERSONAL_HE = (
+    "סקר נשאות גנטית מזהה נשאים לווריאנטים שעלולים להיות רלוונטיים לילדים עתידיים.\n\n"
+    "בהקשר מוצא אשכנזי:\n"
+    "• פאנל אשכנזי קלאסי — מכסה מחלות בתדירות מוגברת באוכלוסייה זו.\n"
+    "• פאנל מורחב (Expanded Carrier Screening) — אינו תלוי במוצא, מוצע כיום לכלל הזוגות.\n\n"
+    "איזה פאנל מתאים? זה תלוי בהיסטוריה המשפחתית, בבדיקות שכבר בוצעו, "
+    "בשלב הרפואי ובהנחיות קופת החולים. לא ניתן לתת המלצה מדויקת ללא פגישה קלינית."
+)
+
+_CARRIER_SCREENING_PERSONAL_CLINICIAN_QUESTIONS: list = [
+    "האם יש במשפחה מחלות גנטיות ידועות שצריכות להשפיע על בחירת הפאנל?",
+    "האם כבר בוצע סקר נשאות לבן/בת הזוג?",
+    "האם הפאנל המוצע הוא פאנל אשכנזי ספציפי או פאנל מורחב (expanded)?",
+    "מה ההמלצות העדכניות של קופת החולים לגבי סקר נשאות לפי המצב שלי?",
+]
+
+
+def _build_carrier_screening_answer(text: str, is_personal: bool = False) -> dict:
+    """
+    Return a carrier-screening / ancestry-related testing educational answer.
+
+    is_personal=True  → explains principles; avoids issuing a personal test list;
+                         includes targeted clinician_questions.
+    is_personal=False → general educational answer about carrier screening panels.
+    """
+    if is_personal:
+        answer_text = _CARRIER_SCREENING_PERSONAL_HE
+        clinician_qs = list(_CARRIER_SCREENING_PERSONAL_CLINICIAN_QUESTIONS)
+        topic_id = "carrier_screening_personal"
+        needs_gc = True
+    else:
+        answer_text = _CARRIER_SCREENING_GENERAL_HE
+        clinician_qs = []
+        topic_id = "carrier_screening_general"
+        needs_gc = False
+
+    return {
+        "answer": answer_text,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": needs_gc,
+        "matched_topic": topic_id,
+        "suggested_questions": [
+            "מה ההבדל בין פאנל אשכנזי לסקר נשאות מורחב?",
+            "מה קורה אם שני בני הזוג נשאים לאותה מחלה?",
+        ],
+        "clinician_questions": clinician_qs,
+        "llm_used": False,
+        "fallback_used": False,
+    }
 
 
 def _classify_general_question(question: str) -> str:
@@ -5123,6 +5260,14 @@ def classify_question_intent(
         return {"intent": "educational_personal_context", "gene_symbol": None,
                 "reason": "educational_personal_phrasing"}
 
+    # C.7. Carrier screening / ancestry-related genetic testing (27.9.1 Part D).
+    # Fires before personal_high_stakes so "אם אני אשכנזייה איזה בדיקות כדאי לי לעשות"
+    # does not fall into the KB and misroute to penetrance.
+    _cs_intent = _detect_carrier_screening_intent(text)
+    if _cs_intent:
+        return {"intent": _cs_intent, "gene_symbol": None,
+                "reason": "carrier_screening_detected"}
+
     # D. Personal medical interpretation / action request
     if safety.is_personal_interpretation_request(text):
         return {"intent": "personal_high_stakes", "gene_symbol": None,
@@ -5246,6 +5391,12 @@ def _answer_question_impl(
     if intent == "specific_variant":
         return _build_variant_evidence_answer(text)
 
+    # C.7. Carrier screening / ancestry-related testing (27.9.1 Part D).
+    if intent == "carrier_screening_general":
+        return _build_carrier_screening_answer(text, is_personal=False)
+    if intent == "carrier_screening_personal":
+        return _build_carrier_screening_answer(text, is_personal=True)
+
     # C.5. Educational personal context — personal phrasing but seeking education.
     # Extract gene + route exactly like E, then fall through to KB/AI if no gene.
     if intent == "educational_personal_context":
@@ -5346,6 +5497,23 @@ def _answer_question_impl(
         # Couldn't resolve any prior context — fall through to normal
         # handling below (most likely ends in the helpful fallback).
 
+    # 5.5. Pre-KB general education bypass (Session 27.9.1 Part C).
+    # _classify_general_question correctly identifies questions like
+    # "כמה גנים יש לצב ים?" as safe_general_education — but without this
+    # step the KB fires first and returns a false-positive entry (e.g.,
+    # what_is_gene fuzzy-matching any question that contains 'גנים').
+    # Running the classifier here, before kb.match_question, lets the AI
+    # route fire first when the flag is enabled and the LLM is available.
+    if not topic and intent == "unclear" and _ai_general_education_fallback_enabled():
+        _pre_route = _classify_general_question(text)
+        if _pre_route == "safe_general_education":
+            _pre_result, _pre_debug = _build_general_education_answer(text)
+            if _pre_result is not None:
+                return _pre_result
+            # LLM unavailable — fall through to KB. The KB may return a false
+            # positive (e.g., human-gene definition for an animal question), but
+            # that is preferable to a hard failure when AI is not configured.
+
     # 6. Knowledge-base lookup (exact + fuzzy fallback tier inside kb.py).
     entry = kb.match_question(text, topic_hint=topic)
     # Guard: reject x_linked KB match when the question has no X-chromosome signal.
@@ -5358,6 +5526,19 @@ def _answer_question_impl(
             "תלוי-x", "תלויה ב-x", "כרומוזום x", "chromosome x",
         )
         if not any(sig in lower_q for sig in _x_signals):
+            entry = None
+    # Guard (27.9.1 Part C): reject what_is_gene for non-human biology questions
+    # only (e.g. sea turtle, dog chromosomes).  Human questions like "מה זה גן?"
+    # or "כמה גנים יש בבן אדם?" must still reach the KB answer.
+    if entry is not None and entry.get("id") == "what_is_gene":
+        _lower_q = text.lower()
+        if any(sig in _lower_q for sig in _NON_HUMAN_BIOLOGY_ORGANISMS):
+            entry = None
+    # Guard (27.9.1 Part D): reject penetrance when the question is about
+    # carrier screening / ancestry-related testing — fuzzy difflib incorrectly
+    # matches these queries against penetrance KB keywords.
+    if entry is not None and entry.get("id") == "penetrance":
+        if _detect_carrier_screening_intent(text) is not None:
             entry = None
     if entry is None:
         # 6.4. Out-of-domain — clearly non-genetics/medicine — return short message
@@ -5400,6 +5581,30 @@ def _answer_question_impl(
                 "enabled": _flag_val in ("1", "true", "yes"),
                 "reason": "topic_set" if topic else "flag_disabled_or_env_mismatch",
             }
+        # Non-human biology questions (sea turtle, dog chromosomes, etc.) must not
+        # receive a personal-medical referral — they are comparative genomics questions
+        # that have nothing to do with the user's own results.
+        # Only fire when the question has an explicit non-human organism signal —
+        # avoid catching generic questions that match "מה ה" (educational intent phrase).
+        if not topic:
+            _lower_text_fb = text.lower()
+            if any(sig in _lower_text_fb for sig in _NON_HUMAN_BIOLOGY_ORGANISMS):
+                _edu_fallback: dict = {
+                    "answer": (
+                        "שאלה ביולוגית מעניינת. אין לי כרגע נתונים ספציפיים מאושרים לגבי "
+                        "שאלה זו במאגר. מידע על גנומיקה השוואתית ניתן למצוא במקורות כגון "
+                        "NCBI Gene ו-Ensembl."
+                    ),
+                    "safety_level": "general_information",
+                    "needs_genetic_counselor": False,
+                    "matched_topic": None,
+                    "suggested_questions": [],
+                    "llm_used": False,
+                    "fallback_used": True,
+                }
+                if _gen_debug is not None:
+                    _edu_fallback["ai_general_debug"] = _gen_debug
+                return _edu_fallback
         _fallback = _build_helpful_fallback(text)
         if _gen_debug is not None:
             _fallback["ai_general_debug"] = _gen_debug

@@ -26,6 +26,14 @@ SAFETY_POLICY_VERSION = "1.0.0"
 # Hebrew sentence; all medical content comes from the deterministic KB.
 LLM_POLICY_VERSION = "2.0.0"
 
+# Session version — identifies the counseling-engine session that produced this build.
+# Format: Session <major>.<minor>.<patch>
+SESSION_VERSION = "Session 27.9.1"
+
+# Prompt version — identifies the prompt/policy generation applied to AI responses.
+# Used in physician review DB entries and debug metadata.
+PROMPT_VERSION = "s2791"
+
 _DATA_VERSION_PATH = Path("data/data_version.json")
 
 
