@@ -118,14 +118,15 @@ def _get_reloaded_rdb():
 
 
 # ===========================================================================
-# Group 1: VUS + ACE — review record created
+# Group 1: VUS + ACE with ClinVar metadata — deterministic note, no AI draft
+# (Session 27.9.4: prefer ClinVar grounded summaries over AI drafts)
 # ===========================================================================
 
 class TestVusAcePersistence:
-    """A VUS+gene question for tier2 ACE must create a pending review record."""
+    """VUS+gene with usable ClinVar metadata must use a deterministic note (no AI draft, no review record)."""
 
     def _call_known_gene(self):
-        """Call _build_known_gene_answer with mocked gene_index and LLM."""
+        """Call _build_known_gene_answer with mocked gene_index; ACE has 1234 variants + phenotypes."""
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
              patch.object(_ce.gene_index, "get_gene_summary", return_value=_FAKE_GENE_SUMMARY), \
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
@@ -134,91 +135,95 @@ class TestVusAcePersistence:
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
-    def test_review_draft_id_in_response(self):
-        """Response must contain review_draft_id after persistence."""
+    def test_no_review_draft_id_when_clinvar_note_used(self):
+        """When ClinVar note is generated, review_draft_id must NOT appear in response."""
         result = self._call_known_gene()
-        assert "review_draft_id" in result, (
-            f"review_draft_id missing from VUS+ACE response. Keys: {list(result.keys())}"
-        )
-        assert result["review_draft_id"] is not None
-
-    def test_review_status_pending(self):
-        """review_status must be 'pending' immediately after persistence."""
-        result = self._call_known_gene()
-        assert result.get("review_status") == "pending", (
-            f"Expected pending, got {result.get('review_status')!r}"
+        assert result.get("review_draft_id") is None, (
+            "review_draft_id must not be set when ClinVar structured data is available"
         )
 
-    def test_physician_reviewed_false(self):
-        """physician_reviewed must be False for a freshly persisted draft."""
-        result = self._call_known_gene()
-        assert result.get("physician_reviewed") is False
-
-    def test_physician_approved_false(self):
-        """physician_approved must be False for a freshly persisted draft."""
-        result = self._call_known_gene()
-        assert result.get("physician_approved") is False
-
-    def test_record_appears_in_list_drafts(self):
-        """The persisted draft must appear in review_db.list_drafts() for gene ACE."""
+    def test_no_pending_record_in_db_when_clinvar_note_used(self):
+        """No physician review record must be created when ClinVar data is used instead of AI draft."""
         self._call_known_gene()
         rdb = _get_reloaded_rdb()
         drafts = rdb.list_drafts(gene_symbol="ACE")
-        assert len(drafts) == 1, f"Expected 1 draft for ACE, got {len(drafts)}"
-        assert drafts[0]["review_status"] == "pending"
-        assert drafts[0]["gene_symbol"] == "ACE"
-
-    def test_normalized_intent_is_vus_known_gene(self):
-        """normalized_intent in the review record must be 'vus_known_gene'."""
-        self._call_known_gene()
-        rdb = _get_reloaded_rdb()
-        drafts = rdb.list_drafts(gene_symbol="ACE")
-        assert drafts[0]["normalized_intent"] == "vus_known_gene"
-
-    def test_draft_type_is_gene_summary(self):
-        """draft_type in the review record must be 'gene_summary'."""
-        self._call_known_gene()
-        rdb = _get_reloaded_rdb()
-        drafts = rdb.list_drafts(gene_symbol="ACE")
-        assert drafts[0]["draft_type"] == "gene_summary"
-
-    def test_source_provenance_not_clinvar_metadata(self):
-        """based_on must NOT be the old misleading 'clinvar_metadata' value."""
-        result = self._call_known_gene()
-        draft = result.get("unverified_gene_draft", {})
-        based_on = draft.get("based_on", "")
-        assert based_on != "clinvar_metadata", (
-            "based_on must not claim ClinVar supplied biology explanation"
-        )
-        assert "model_expansion" in based_on, (
-            f"Expected model_expansion provenance, got {based_on!r}"
+        assert len(drafts) == 0, (
+            f"Expected 0 review records for ACE (ClinVar grounded), got {len(drafts)}"
         )
 
-    def test_source_grounded_false(self):
-        """source_grounded must be False in the draft (model expansion, not grounded)."""
+    def test_clinvar_note_appended_to_answer(self):
+        """ClinVar note must be appended to the main answer text."""
         result = self._call_known_gene()
-        draft = result.get("unverified_gene_draft", {})
-        assert draft.get("source_grounded") is False
+        assert "ClinVar" in result["answer"], (
+            "ClinVar note must appear in the answer when structured metadata is available"
+        )
 
-    def test_requires_physician_review_true(self):
-        """requires_physician_review must be True in the draft."""
+    def test_clinvar_note_contains_disclaimer(self):
+        """ClinVar note must contain the mandatory data-vs-personal interpretation disclaimer."""
         result = self._call_known_gene()
-        draft = result.get("unverified_gene_draft", {})
-        assert draft.get("requires_physician_review") is True
+        assert "אינו מפרש את הממצא האישי שלך" in result["answer"], (
+            "Disclaimer phrase must appear in the ClinVar note"
+        )
+
+    def test_no_review_record_in_list_drafts(self):
+        """list_drafts must return empty list after a ClinVar-grounded VUS+ACE call."""
+        self._call_known_gene()
+        rdb = _get_reloaded_rdb()
+        all_drafts = rdb.list_drafts()
+        assert all_drafts == [], (
+            f"No physician queue entries expected for ClinVar-grounded answer. Got: {all_drafts}"
+        )
+
+    def test_gene_knowledge_status_clinvar_summarized(self):
+        """gene_knowledge_status in gene_metadata must be 'clinvar_summarized'."""
+        result = self._call_known_gene()
+        gm = result.get("gene_metadata", {})
+        assert gm.get("gene_knowledge_status") == "clinvar_summarized", (
+            f"Expected 'clinvar_summarized', got {gm.get('gene_knowledge_status')!r}"
+        )
+
+    def test_ai_draft_debug_shows_clinvar_path(self):
+        """ai_draft_debug.reason must explain that ClinVar data was used instead of AI."""
+        result = self._call_known_gene()
+        debug = result.get("ai_draft_debug", {})
+        assert debug.get("reason") == "clinvar_structured_data_used_instead", (
+            f"Expected clinvar_structured_data_used_instead, got {debug.get('reason')!r}"
+        )
+
+    def test_no_unverified_gene_draft_when_clinvar_used(self):
+        """unverified_gene_draft must NOT appear in the response when ClinVar note is shown."""
+        result = self._call_known_gene()
+        assert result.get("unverified_gene_draft") is None, (
+            "unverified_gene_draft must not be present when ClinVar grounding is used"
+        )
+
+    def test_source_grounded_true_in_metadata(self):
+        """gene_metadata.source_grounded must be True when ClinVar structured data is used."""
+        result = self._call_known_gene()
+        gm = result.get("gene_metadata", {})
+        assert gm.get("source_grounded") is True, (
+            f"source_grounded must be True for ClinVar-grounded response, got {gm.get('source_grounded')!r}"
+        )
+
+    def test_llm_used_false_when_clinvar_summarized(self):
+        """llm_used must remain False when ClinVar structured data is used (no AI expansion)."""
+        result = self._call_known_gene()
+        assert result.get("llm_used") is False, (
+            f"llm_used must be False for ClinVar-grounded response, got {result.get('llm_used')!r}"
+        )
 
     def test_patient_answer_still_present(self):
-        """The VUS explanation must still be in the main answer (not replaced by AI)."""
+        """The VUS explanation must still be in the main answer (ClinVar note is appended, not replacing)."""
         result = self._call_known_gene()
         assert "VUS" in result["answer"] or "ממצא" in result["answer"], (
             "VUS explanation must still appear in the main answer"
         )
 
-    def test_bridging_note_in_answer_when_draft_shown(self):
-        """When a draft is shown, main answer must contain a bridging note about additional info."""
+    def test_no_ai_bridging_note_when_clinvar_summarized(self):
+        """'מידע כללי נוסף' AI bridging note must NOT appear when ClinVar data is used."""
         result = self._call_known_gene()
-        assert result.get("unverified_gene_draft") is not None, "Draft must be present"
-        assert "מידע כללי נוסף" in result["answer"] or "בהמשך" in result["answer"], (
-            f"Expected bridging note, answer starts: {result['answer'][:200]!r}"
+        assert "מידע כללי נוסף על הגן" not in result["answer"], (
+            "AI bridging note must not appear when ClinVar structured data is used"
         )
 
     def test_no_internal_clinvar_approval_sentence(self):
@@ -228,14 +233,12 @@ class TestVusAcePersistence:
             "Internal review-architecture sentence must not appear in patient-facing answer"
         )
 
-    def test_review_metadata_in_unverified_gene_draft(self):
-        """review_draft_id must also be mirrored into unverified_gene_draft sub-object."""
+    def test_no_review_persistence_failed_when_clinvar_used(self):
+        """review_persistence_failed must NOT be set when ClinVar data prevents AI draft."""
         result = self._call_known_gene()
-        draft = result.get("unverified_gene_draft", {})
-        assert "review_draft_id" in draft, (
-            f"review_draft_id missing from unverified_gene_draft. Keys: {list(draft.keys())}"
+        assert not result.get("review_persistence_failed"), (
+            "review_persistence_failed must not be set when ClinVar path is taken (no draft to persist)"
         )
-        assert draft["review_draft_id"] == result.get("review_draft_id")
 
 
 # ===========================================================================
@@ -243,7 +246,7 @@ class TestVusAcePersistence:
 # ===========================================================================
 
 class TestVusAceDeduplication:
-    """Second identical VUS+ACE call reuses existing pending record."""
+    """Second identical VUS+ACE call reuses existing pending record (ClinVar note bypassed to force AI draft path)."""
 
     def _call(self):
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
@@ -251,6 +254,7 @@ class TestVusAceDeduplication:
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "has_approved_gene_knowledge", return_value=False), \
+             patch.object(_ce, "_build_vus_clinvar_gene_note", return_value=None), \
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
@@ -286,7 +290,7 @@ class TestVusAceDeduplication:
 # ===========================================================================
 
 class TestVusAceApprovalLifecycle:
-    """Approve → approved reuse; physician edit takes precedence."""
+    """Approve → approved reuse; physician edit takes precedence. ClinVar note bypassed to force AI draft path."""
 
     def _create_draft_via_engine(self):
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
@@ -294,6 +298,7 @@ class TestVusAceApprovalLifecycle:
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "has_approved_gene_knowledge", return_value=False), \
+             patch.object(_ce, "_build_vus_clinvar_gene_note", return_value=None), \
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
@@ -353,7 +358,7 @@ class TestVusAceApprovalLifecycle:
 # ===========================================================================
 
 class TestVusAceRejectionLifecycle:
-    """Rejected / needs_revision drafts must not be reused as approved content."""
+    """Rejected / needs_revision drafts must not be reused as approved content. ClinVar note bypassed."""
 
     def _create_draft(self):
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
@@ -361,6 +366,7 @@ class TestVusAceRejectionLifecycle:
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "has_approved_gene_knowledge", return_value=False), \
+             patch.object(_ce, "_build_vus_clinvar_gene_note", return_value=None), \
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
@@ -406,7 +412,7 @@ class TestVusAceRejectionLifecycle:
 # ===========================================================================
 
 class TestPersistenceFailureSafety:
-    """DB errors must not reach the patient response."""
+    """DB errors must not reach the patient response. ClinVar note bypassed to force AI draft path."""
 
     def _call_with_db_failure(self):
         """Call _build_known_gene_answer with mocked gene_index, LLM, and DB failure."""
@@ -415,6 +421,7 @@ class TestPersistenceFailureSafety:
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "has_approved_gene_knowledge", return_value=False), \
+             patch.object(_ce, "_build_vus_clinvar_gene_note", return_value=None), \
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE), \
              patch.object(_ce, "_persist_reviewable_ai_expansion", return_value=None):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")

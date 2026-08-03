@@ -246,6 +246,103 @@ def _attach_review_metadata(result: dict, record: "Optional[dict]", draft_key: s
         result["review_persistence_failed"] = True
 
 
+_PATHOGENIC_SIG_KEYS = frozenset({
+    "pathogenic", "likely pathogenic", "pathogenic/likely pathogenic",
+    "pathogenic/likely_pathogenic",
+})
+_VUS_SIG_KEYS = frozenset({
+    "uncertain significance", "uncertain_significance", "vus",
+    "variant of uncertain significance",
+})
+_BENIGN_SIG_KEYS = frozenset({
+    "benign", "likely benign", "benign/likely benign",
+    "benign/likely_benign",
+})
+_CLINVAR_NOTE_TRIVIAL_PHENOS = frozenset({
+    "not specified", "not provided", "see cases", "not applicable",
+    "all disease", "disease", "", "none provided", "not determined",
+})
+
+
+def _format_vus_significance_note(by_sig: dict) -> str:
+    """Return a short Hebrew sentence describing which significance categories are present."""
+    if not by_sig:
+        return ""
+    has_path = any(
+        k.lower().strip() in _PATHOGENIC_SIG_KEYS or (
+            "pathogenic" in k.lower() and "benign" not in k.lower()
+        )
+        for k, v in by_sig.items() if v
+    )
+    has_vus = any(
+        k.lower().strip() in _VUS_SIG_KEYS or "uncertain" in k.lower()
+        for k, v in by_sig.items() if v
+    )
+    has_benign = any(
+        k.lower().strip() in _BENIGN_SIG_KEYS or (
+            "benign" in k.lower() and "pathogenic" not in k.lower()
+        )
+        for k, v in by_sig.items() if v
+    )
+    categories = []
+    if has_vus:
+        categories.append("VUS")
+    if has_benign:
+        categories.append("likely benign")
+    if has_path:
+        categories.append("pathogenic")
+    if not categories:
+        return ""
+    if len(categories) == 1:
+        return f"הרשומות כוללות ממצאים שסווגו כ-{categories[0]}."
+    if len(categories) == 2:
+        return f"הרשומות כוללות ממצאים שסווגו כ-{categories[0]} ו-{categories[1]}."
+    return f"הרשומות כוללות ממצאים שסווגו כ-{categories[0]}, {categories[1]} ו-{categories[2]}."
+
+
+def _build_vus_clinvar_gene_note(gene: str, g_summary: Optional[dict]) -> Optional[str]:
+    """
+    Build a deterministic source-grounded Hebrew note about a gene's ClinVar profile.
+
+    Uses ONLY trusted structured fields: total_variants, by_significance, phenotypes.
+    Does NOT invent biological mechanisms or pathway information.
+    Returns None when no usable metadata is available (< 10 variants and no phenotypes),
+    so the caller can fall through to alternative paths.
+    Always appends a disclaimer that this describes DB records, not the user's variant.
+    """
+    if not g_summary:
+        return None
+    total = g_summary.get("total_variants") or 0
+    by_sig = g_summary.get("by_significance") or {}
+    raw_phenotypes = [
+        p.strip()
+        for p in (g_summary.get("phenotypes") or [])[:8]
+        if p and len(p.strip()) > 4
+        and p.strip().lower() not in _CLINVAR_NOTE_TRIVIAL_PHENOS
+    ]
+    if total < 10 and not raw_phenotypes:
+        return None
+    sentences = []
+    if total >= 10:
+        sentences.append(f"במאגר ClinVar קיימות {total:,} רשומות הקשורות לגן {gene}.")
+    else:
+        sentences.append(f"הגן {gene} מופיע במאגר ClinVar.")
+    sig_note = _format_vus_significance_note(by_sig)
+    if sig_note:
+        sentences.append(sig_note)
+    if raw_phenotypes:
+        if len(raw_phenotypes) == 1:
+            sentences.append(f"בין המצבים המדווחים במאגר: {raw_phenotypes[0]}.")
+        else:
+            sentences.append(
+                f"בין המצבים המדווחים במאגר: {raw_phenotypes[0]} ו-{raw_phenotypes[1]}."
+            )
+    sentences.append(
+        "מידע זה מתאר את הרשומות במאגר ואינו מפרש את הממצא האישי שלך."
+    )
+    return " ".join(sentences)
+
+
 def _build_known_gene_answer(gene: str, question: str = "", include_unverified_gene_draft: bool = False) -> dict:
     """
     Build a warm, enriched answer for "I got a VUS in gene X" questions.
@@ -378,54 +475,71 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         "gene_metadata": gene_meta,
     }
     if gene_meta["answer_tier"] == "tier2":
-        _vus_draft_debug: dict = {}
-        draft = _generate_unverified_gene_draft(
-            gene, question, clinvar_context=g_summary, use_lenient_validator=True,
-            _debug=_vus_draft_debug,
-        )
-        draft_ok = draft is not None
-        gene_meta["unverified_gene_draft_available"] = draft_ok
-        gene_meta["ai_draft_attempted"] = _vus_draft_debug.get("attempted", False)
-        gene_meta["ai_draft_generated"] = draft_ok
-        if draft_ok:
-            result["llm_used"] = True
-            result["llm_mode"] = "draft_openai"
-            # Part F (27.9.3): patient-friendly bridging note — no internal review jargon.
-            result["answer"] += f"\n\nמידע כללי נוסף על הגן {gene} מופיע בהמשך."
-            result["unverified_gene_draft"] = draft
+        # Part C (27.9.4): prefer ClinVar structured metadata before AI draft.
+        # If usable metadata is available (variant count / phenotypes), formulate
+        # a deterministic source-grounded note — no physician review needed.
+        # Only fall through to AI expansion when no usable ClinVar data is present.
+        _clinvar_note = _build_vus_clinvar_gene_note(gene, g_summary)
+        if _clinvar_note:
+            # Tier 2a: ClinVar structured data available → deterministic note, no AI expansion.
+            result["answer"] += f"\n\n{_clinvar_note}"
+            gene_meta["gene_knowledge_status"] = "clinvar_summarized"
+            gene_meta["source_grounded"] = True
+            gene_meta["ai_draft_attempted"] = False
+            gene_meta["ai_draft_generated"] = False
+            gene_meta["unverified_gene_draft_available"] = False
             result["ai_draft_debug"] = {
-                "attempted": True,
-                "generated": True,
-                "shown": True,
-                "provider": _vus_draft_debug.get("provider", "unknown"),
-            }
-            # Part B (27.9.3): persist to physician review queue.
-            # Deduplication handled inside _persist_reviewable_ai_expansion via
-            # review_db.create_draft() content_hash + gene_symbol matching.
-            _vus_persist_record = _persist_reviewable_ai_expansion(
-                draft,
-                draft_type="gene_summary",
-                normalized_intent="vus_known_gene",
-                gene_symbol=gene,
-                model_provider=_vus_draft_debug.get("provider"),
-                source_metadata={
-                    "ai_content_type": "medical_educational_ai_expansion",
-                    "source_basis": "model_expansion_with_clinvar_gene_context",
-                    "source_grounded": False,
-                    "requires_physician_review": True,
-                    "answer_tier": "tier2",
-                    "total_variants": g_summary.get("total_variants") if g_summary else None,
-                },
-            )
-            _attach_review_metadata(result, _vus_persist_record)
-        else:
-            result["ai_draft_debug"] = _vus_draft_debug or {
                 "attempted": False,
                 "generated": False,
                 "shown": False,
-                "reason": "llm_not_configured_or_unknown",
+                "reason": "clinvar_structured_data_used_instead",
             }
-            result["ai_draft_debug"].setdefault("shown", False)
+        else:
+            # Tier 2b: no usable ClinVar metadata → attempt AI biology expansion.
+            _vus_draft_debug: dict = {}
+            draft = _generate_unverified_gene_draft(
+                gene, question, clinvar_context=g_summary, use_lenient_validator=True,
+                _debug=_vus_draft_debug,
+            )
+            draft_ok = draft is not None
+            gene_meta["unverified_gene_draft_available"] = draft_ok
+            gene_meta["ai_draft_attempted"] = _vus_draft_debug.get("attempted", False)
+            gene_meta["ai_draft_generated"] = draft_ok
+            if draft_ok:
+                result["llm_used"] = True
+                result["llm_mode"] = "draft_openai"
+                result["answer"] += f"\n\nמידע כללי נוסף על הגן {gene} מופיע בהמשך."
+                result["unverified_gene_draft"] = draft
+                result["ai_draft_debug"] = {
+                    "attempted": True,
+                    "generated": True,
+                    "shown": True,
+                    "provider": _vus_draft_debug.get("provider", "unknown"),
+                }
+                _vus_persist_record = _persist_reviewable_ai_expansion(
+                    draft,
+                    draft_type="gene_summary",
+                    normalized_intent="vus_known_gene",
+                    gene_symbol=gene,
+                    model_provider=_vus_draft_debug.get("provider"),
+                    source_metadata={
+                        "ai_content_type": "medical_educational_ai_expansion",
+                        "source_basis": "model_expansion_with_clinvar_gene_context",
+                        "source_grounded": False,
+                        "requires_physician_review": True,
+                        "answer_tier": "tier2",
+                        "total_variants": g_summary.get("total_variants") if g_summary else None,
+                    },
+                )
+                _attach_review_metadata(result, _vus_persist_record)
+            else:
+                result["ai_draft_debug"] = _vus_draft_debug or {
+                    "attempted": False,
+                    "generated": False,
+                    "shown": False,
+                    "reason": "llm_not_configured_or_unknown",
+                }
+                result["ai_draft_debug"].setdefault("shown", False)
     return result
 
 # ---------------------------------------------------------------------------
