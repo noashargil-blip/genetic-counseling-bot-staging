@@ -161,6 +161,91 @@ def _detect_known_gene(text: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Shared persistence helper for patient-visible medical AI expansions (27.9.3)
+# ---------------------------------------------------------------------------
+
+def _persist_reviewable_ai_expansion(
+    draft: dict,
+    draft_type: str,
+    normalized_intent: str,
+    gene_symbol: "Optional[str]" = None,
+    normalized_query: "Optional[str]" = None,
+    source_metadata: "Optional[dict]" = None,
+    model_provider: "Optional[str]" = None,
+    prompt_version: str = "s2793",
+) -> "Optional[dict]":
+    """
+    Persist a patient-visible medical AI expansion to the physician review queue.
+
+    Returns the review_db record dict on success (new or existing duplicate),
+    None on failure. Never raises — patient response must never be affected.
+
+    Deduplication is handled inside review_db.create_draft():
+    - Same content_hash + gene_symbol that is pending/needs_revision → update
+      last_seen_at/seen_count and return the existing record.
+    - Approved record found separately by the caller via get_approved_draft().
+
+    Must NOT be called for GENERAL_LOW_RISK_AI or SOURCE_GROUNDED_AI expansions.
+    """
+    text_he = (draft or {}).get("text_he", "")
+    if not text_he or len(text_he.strip()) < 10:
+        logger.debug(
+            "_persist_reviewable_ai_expansion: draft text too short, skip (%s / %s)",
+            draft_type, gene_symbol,
+        )
+        return None
+    try:
+        from app import review_db as _rdb
+        record = _rdb.create_draft(
+            draft_type=draft_type,
+            original_ai_text=text_he,
+            gene_symbol=gene_symbol,
+            normalized_intent=normalized_intent,
+            normalized_query=normalized_query,
+            model_provider=model_provider or draft.get("generated_by_provider"),
+            model_name=draft.get("generated_by_model"),
+            prompt_version=prompt_version,
+            source_metadata=source_metadata,
+        )
+        if record:
+            logger.debug(
+                "_persist_reviewable_ai_expansion: persisted %s for %s, id=%s, status=%s",
+                draft_type, gene_symbol, record.get("id"), record.get("review_status"),
+            )
+        return record
+    except Exception as exc:
+        logger.warning(
+            "_persist_reviewable_ai_expansion: failed for %s/%s: %s",
+            draft_type, gene_symbol, type(exc).__name__,
+        )
+        return None
+
+
+def _attach_review_metadata(result: dict, record: "Optional[dict]", draft_key: str = "unverified_gene_draft") -> None:
+    """
+    Attach physician-review metadata from a review_db record to the API response.
+
+    Sets top-level review_draft_id / review_status, and mirrors them into the
+    draft sub-object (``draft_key``) so the frontend can read either location.
+    When ``record`` is None (persistence failed), marks review_persistence_failed=True.
+    Never mutates the record dict.
+    """
+    if record:
+        result["review_draft_id"] = record.get("id")
+        result["review_status"] = record.get("review_status")
+        result["physician_reviewed"] = record.get("physician_reviewed", False)
+        result["physician_approved"] = record.get("physician_approved", False)
+        result["revision"] = record.get("revision", 0)
+        if draft_key in result and isinstance(result[draft_key], dict):
+            result[draft_key]["review_draft_id"] = record.get("id")
+            result[draft_key]["review_status"] = record.get("review_status")
+            result[draft_key]["physician_reviewed"] = record.get("physician_reviewed", False)
+            result[draft_key]["physician_approved"] = record.get("physician_approved", False)
+    else:
+        result["review_persistence_failed"] = True
+
+
 def _build_known_gene_answer(gene: str, question: str = "", include_unverified_gene_draft: bool = False) -> dict:
     """
     Build a warm, enriched answer for "I got a VUS in gene X" questions.
@@ -210,15 +295,10 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             "ככל שמצטברות ראיות מדעיות חדשות."
         )
         parts = [opening, vus_practical]
-        # Tier-2 gene (in ClinVar index, no approved Hebrew card): add a
-        # patient-friendly note instead of a raw ClinVar dump.
-        # Stats stay in gene_metadata for the collapsed technical UI card.
-        if gene_index._GENE_INDEX_AVAILABLE and gene_index.get_gene_summary(gene) is not None:
-            gene_note = (
-                f"לגבי הגן {gene}: נמצא במאגר ClinVar, אך אין עדיין סיכום ביולוגי "
-                "מאושר בעברית עבורו."
-            )
-            parts.append(gene_note)
+        # Tier-2 gene (in ClinVar index, no approved Hebrew card): do NOT add
+        # an internal note about missing Hebrew approval — that exposes the review
+        # architecture to patients. If an AI draft is generated, a bridging note
+        # is appended below AFTER draft generation succeeds (Part F, 27.9.3).
 
     # ClinVar stats go to gene_metadata only — not the main answer text.
     g_summary = gene_index.get_gene_summary(gene) if gene_index._GENE_INDEX_AVAILABLE else None  # noqa: F821
@@ -310,6 +390,8 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         if draft_ok:
             result["llm_used"] = True
             result["llm_mode"] = "draft_openai"
+            # Part F (27.9.3): patient-friendly bridging note — no internal review jargon.
+            result["answer"] += f"\n\nמידע כללי נוסף על הגן {gene} מופיע בהמשך."
             result["unverified_gene_draft"] = draft
             result["ai_draft_debug"] = {
                 "attempted": True,
@@ -317,6 +399,25 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
                 "shown": True,
                 "provider": _vus_draft_debug.get("provider", "unknown"),
             }
+            # Part B (27.9.3): persist to physician review queue.
+            # Deduplication handled inside _persist_reviewable_ai_expansion via
+            # review_db.create_draft() content_hash + gene_symbol matching.
+            _vus_persist_record = _persist_reviewable_ai_expansion(
+                draft,
+                draft_type="gene_summary",
+                normalized_intent="vus_known_gene",
+                gene_symbol=gene,
+                model_provider=_vus_draft_debug.get("provider"),
+                source_metadata={
+                    "ai_content_type": "medical_educational_ai_expansion",
+                    "source_basis": "model_expansion_with_clinvar_gene_context",
+                    "source_grounded": False,
+                    "requires_physician_review": True,
+                    "answer_tier": "tier2",
+                    "total_variants": g_summary.get("total_variants") if g_summary else None,
+                },
+            )
+            _attach_review_metadata(result, _vus_persist_record)
         else:
             result["ai_draft_debug"] = _vus_draft_debug or {
                 "attempted": False,
@@ -2011,28 +2112,28 @@ def _build_chromosome_education_answer(
             else "identical_to_main_answer"
         )
 
-    # Auto-enqueue new draft to physician review DB (non-blocking; never raises).
-    # Session 27.9 Part J: add risk_class and intended_use to create_draft metadata.
+    # Auto-enqueue new draft to physician review DB via shared helper (27.9.3).
+    # Uses _persist_reviewable_ai_expansion so review metadata is returned
+    # and attached to the response.
+    _chr_persist_record: "Optional[dict]" = None
     if chr_draft_available and chr_draft:
-        try:
-            from app import review_db as _rdb
-            _rdb.create_draft(
-                draft_type="chromosome_education",
-                original_ai_text=chr_draft.get("text_he", ""),
-                gene_symbol=None,
-                normalized_intent=sub_intent,
-                model_provider=_chr_draft_debug.get("provider"),
-                model_name=chr_draft.get("generated_by_model"),
-                prompt_version="s279",
-                source_metadata={
-                    "sub_intent": sub_intent,
-                    "ai_content_type": "medical_educational_ai_expansion",
-                    "risk_class": "medical_educational",
-                    "intended_use": "supplemental_medical_expansion",
-                },
-            )
-        except Exception:
-            pass
+        _chr_persist_record = _persist_reviewable_ai_expansion(
+            chr_draft,
+            draft_type="chromosome_education",
+            normalized_intent=sub_intent,
+            gene_symbol=None,
+            model_provider=_chr_draft_debug.get("provider"),
+            prompt_version="s279",  # session when chromosome prompt was introduced
+            source_metadata={
+                "sub_intent": sub_intent,
+                "ai_content_type": "medical_educational_ai_expansion",
+                "source_basis": "model_chromosome_education",
+                "source_grounded": False,
+                "requires_physician_review": True,
+                "risk_class": "medical_educational",
+                "intended_use": "supplemental_medical_expansion",
+            },
+        )
 
     result: dict = {
         "answer": main_answer,
@@ -2062,6 +2163,7 @@ def _build_chromosome_education_answer(
     }
     if chr_draft_available:
         result["unverified_chromosome_draft"] = chr_draft
+        _attach_review_metadata(result, _chr_persist_record, draft_key="unverified_chromosome_draft")
 
     return result
 
@@ -3908,10 +4010,20 @@ def _generate_unverified_gene_draft(
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
         if use_clinvar_context:
-            result["based_on"] = "clinvar_metadata"
+            # Part E (27.9.3): explicit provenance — the model generates biology
+            # explanation from its own knowledge with ClinVar gene context as a hint.
+            # ClinVar supplies only variant counts / phenotype associations, NOT
+            # protein function, mechanism, or pathway — do not claim it does.
+            result["based_on"] = "model_expansion_with_clinvar_gene_context"
+            result["source_grounded"] = False
+            result["requires_physician_review"] = True
+            result["ai_content_type"] = "medical_educational_ai_expansion"
             result["source_note_he"] = _UNVERIFIED_DRAFT_SOURCE_NOTE_HE
         else:
-            result["based_on"] = "llm_knowledge"
+            result["based_on"] = "model_expansion_llm_knowledge"
+            result["source_grounded"] = False
+            result["requires_physician_review"] = True
+            result["ai_content_type"] = "medical_educational_ai_expansion"
         return result
 
     except LLMClientError as exc:
@@ -4774,23 +4886,23 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
     # Auto-enqueue to physician review DB for AI_EXPANDED_UNVERIFIED only.
     # SOURCE_GROUNDED_PHRASING must NOT populate the physician review queue (Part I).
     if draft_available and unverified_draft and not grounded_answer:
-        try:
-            from app import review_db as _rdb  # lazy import to avoid circular dep
-            _rdb.create_draft(
-                draft_type="gene_summary",
-                original_ai_text=unverified_draft.get("text_he", ""),
-                gene_symbol=gene,
-                model_provider=_draft_debug.get("provider"),
-                model_name=unverified_draft.get("generated_by_model"),
-                prompt_version="s26",
-                source_metadata={
-                    "answer_tier": "tier2",
-                    "total_variants": summary.get("total_variants"),
-                    "based_on": unverified_draft.get("based_on"),
-                },
-            )
-        except Exception:
-            pass  # patient response must never be affected
+        _gene_clinvar_persist_record = _persist_reviewable_ai_expansion(
+            unverified_draft,
+            draft_type="gene_summary",
+            normalized_intent="gene_biology_expansion",
+            gene_symbol=gene,
+            model_provider=_draft_debug.get("provider"),
+            prompt_version="s26",  # session when gene biology prompt was introduced
+            source_metadata={
+                "ai_content_type": "medical_educational_ai_expansion",
+                "source_basis": "model_expansion_with_clinvar_gene_context",
+                "source_grounded": False,
+                "requires_physician_review": True,
+                "answer_tier": "tier2",
+                "total_variants": summary.get("total_variants"),
+            },
+        )
+        _attach_review_metadata(result, _gene_clinvar_persist_record)
 
     return result
 
