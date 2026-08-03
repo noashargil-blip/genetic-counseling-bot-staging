@@ -14,6 +14,7 @@ deploy_*.sh
 
 # Local databases / heavy files
 data/sessions.db
+data/review_drafts.db
 
 *.duckdb
 data/*.duckdb
