@@ -187,7 +187,7 @@ class TestBuildVusClinvarNoteHelper:
 # ===========================================================================
 
 class TestVusAceClinvarGrounding:
-    """VUS+gene default behavior: phrased educational answer, no ClinVar note, no AI draft."""
+    """VUS+gene: resolver generates AI gene explanation (supplemental card), main answer is VUS text."""
 
     def _call(self, gene_summary=None, question="מה המשמעות של VUS בגן ACE?"):
         if gene_summary is None:
@@ -200,40 +200,45 @@ class TestVusAceClinvarGrounding:
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question=question)
 
-    def test_no_unverified_draft_when_clinvar_data_present(self):
+    def test_unverified_gene_draft_in_supplemental_card(self):
+        """27.9.6: resolver generates AI gene explanation → unverified_gene_draft set."""
         result = self._call()
-        assert result.get("unverified_gene_draft") is None, (
-            "unverified_gene_draft must not appear for default VUS+gene"
+        assert result.get("unverified_gene_draft") is not None, (
+            "unverified_gene_draft must appear in supplemental card when AI gene explanation generated"
         )
 
     def test_no_clinvar_note_in_default_vus_answer(self):
-        """Default VUS+gene answer must NOT inject raw ClinVar statistics."""
+        """Default VUS+gene main answer must NOT inject raw ClinVar statistics."""
         result = self._call()
         assert "במאגר ClinVar קיימות" not in result["answer"], (
-            "ClinVar record count must not appear in default VUS+gene answer"
+            "ClinVar record count must not appear in default VUS+gene main answer"
         )
 
-    def test_no_review_draft_id_in_response(self):
+    def test_review_draft_id_in_response(self):
+        """27.9.6: review_draft_id must be set for AI gene explanation."""
         result = self._call()
-        assert result.get("review_draft_id") is None
+        assert result.get("review_draft_id") is not None
 
-    def test_no_pending_record_in_db(self):
+    def test_pending_record_in_db(self):
+        """27.9.6: AI gene explanation must be persisted to the physician review queue."""
         self._call()
         rdb = _get_rdb()
-        assert rdb.list_drafts() == []
+        assert len(rdb.list_drafts()) == 1
 
-    def test_gene_knowledge_status_clinvar_index_no_expansion(self):
+    def test_gene_knowledge_status_ai_draft_pending(self):
+        """gene_knowledge_status must be 'ai_draft_pending' when AI gene explanation generated."""
         result = self._call()
         gm = result.get("gene_metadata", {})
-        assert gm.get("gene_knowledge_status") == "clinvar_index_no_expansion", (
-            f"Expected 'clinvar_index_no_expansion', got {gm.get('gene_knowledge_status')!r}"
+        assert gm.get("gene_knowledge_status") == "ai_draft_pending", (
+            f"Expected 'ai_draft_pending', got {gm.get('gene_knowledge_status')!r}"
         )
 
-    def test_ai_draft_debug_reason_tier2_deterministic(self):
+    def test_ai_draft_debug_reason_gene_explanation_ai_generated(self):
+        """ai_draft_debug.reason must reflect gene explanation generation."""
         result = self._call()
         debug = result.get("ai_draft_debug", {})
-        assert debug.get("reason") == "tier2_deterministic_only", (
-            f"Expected tier2_deterministic_only, got {debug.get('reason')!r}"
+        assert debug.get("reason") == "gene_explanation_ai_generated", (
+            f"Expected gene_explanation_ai_generated, got {debug.get('reason')!r}"
         )
 
     def test_vus_explanation_still_in_answer(self):
@@ -241,6 +246,7 @@ class TestVusAceClinvarGrounding:
         assert "VUS" in result["answer"] or "ממצא" in result["answer"]
 
     def test_llm_used_false(self):
+        """llm_used must remain False — the main answer is deterministic VUS text."""
         result = self._call()
         assert result.get("llm_used") is False
 
@@ -250,17 +256,14 @@ class TestVusAceClinvarGrounding:
         assert gm.get("answer_tier") == "tier2"
 
     def test_no_disclaimer_in_default_vus_answer(self):
-        """The ClinVar DB disclaimer must NOT appear in the default VUS+gene answer."""
+        """The ClinVar DB disclaimer must NOT appear in the default VUS+gene main answer."""
         result = self._call()
-        assert "אינו מפרש את הממצא האישי שלך" not in result["answer"], (
-            "ClinVar disclaimer must not appear in default VUS+gene answer"
-        )
+        assert "אינו מפרש את הממצא האישי שלך" not in result["answer"]
 
     def test_no_clinvar_note_for_phenotype_only_summary(self):
-        """Gene with only phenotypes and few variants must also NOT show ClinVar note by default."""
+        """Gene with few variants (phenotype only) must also not show ClinVar note in main answer."""
         result = self._call(gene_summary=_GENE_SUMMARY_ONLY_PHENOTYPES)
         assert "במאגר ClinVar קיימות" not in result["answer"]
-        assert result.get("unverified_gene_draft") is None
 
 
 # ===========================================================================
@@ -290,18 +293,18 @@ class TestVusTier3Fallback:
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
-    def test_no_ai_draft_when_no_clinvar_data(self):
-        """Tier2 with empty data must also return no AI draft (AI drafts removed from VUS+gene path)."""
+    def test_ai_draft_generated_for_tier2_with_empty_data(self):
+        """27.9.6: resolver generates AI gene explanation even when ClinVar has empty metadata."""
         result = self._call_no_data()
-        assert result.get("unverified_gene_draft") is None, (
-            "AI draft must NOT be generated in tier2 default path (27.9.5 policy)"
+        assert result.get("unverified_gene_draft") is not None, (
+            "AI gene explanation must be generated and set in supplemental card (27.9.6 policy)"
         )
 
-    def test_no_review_record_when_no_clinvar_data(self):
-        """No physician review record must be created for tier2 with empty metadata."""
+    def test_review_record_created_for_tier2_with_empty_data(self):
+        """27.9.6: AI gene explanation is persisted for physician review even with empty ClinVar data."""
         self._call_no_data()
         rdb = _get_rdb()
-        assert rdb.list_drafts() == [], "No review records must be created for tier2 default"
+        assert len(rdb.list_drafts()) == 1, "AI gene explanation must be persisted to review queue"
 
     def test_no_clinvar_note_when_tier3(self):
         """Tier3 (not in index at all) must not have a ClinVar note in the answer."""

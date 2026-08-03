@@ -129,13 +129,15 @@ class TestVusAcePhrasingRestored:
         result = _vus_ace_call()
         assert ";" not in result["answer"], "No semicolons must appear in VUS answer"
 
-    def test_no_unverified_draft_in_response(self):
+    def test_unverified_draft_in_supplemental_card(self):
+        """27.9.6: AI gene explanation appears in unverified_gene_draft supplemental card."""
         result = _vus_ace_call()
-        assert result.get("unverified_gene_draft") is None
+        assert result.get("unverified_gene_draft") is not None
 
-    def test_no_review_db_record_created(self):
+    def test_review_db_record_created_for_gene_expl(self):
+        """27.9.6: AI gene explanation is persisted to the physician review queue."""
         _vus_ace_call()
-        assert _get_rdb().list_drafts() == [], "No physician review record must be created"
+        assert len(_get_rdb().list_drafts()) == 1
 
     def test_gene_metadata_present(self):
         result = _vus_ace_call()
@@ -143,15 +145,17 @@ class TestVusAcePhrasingRestored:
         gm = result["gene_metadata"]
         assert gm.get("answer_tier") == "tier2"
 
-    def test_gene_knowledge_status_is_clinvar_index_no_expansion(self):
+    def test_gene_knowledge_status_is_ai_draft_pending(self):
+        """27.9.6: gene_knowledge_status is 'ai_draft_pending' when AI gene explanation generated."""
         result = _vus_ace_call()
         gm = result.get("gene_metadata", {})
-        assert gm.get("gene_knowledge_status") == "clinvar_index_no_expansion"
+        assert gm.get("gene_knowledge_status") == "ai_draft_pending"
 
-    def test_ai_draft_debug_reason_tier2_deterministic(self):
+    def test_ai_draft_debug_reason_gene_explanation_ai_generated(self):
+        """27.9.6: ai_draft_debug.reason reflects gene explanation generation."""
         result = _vus_ace_call()
         debug = result.get("ai_draft_debug", {})
-        assert debug.get("reason") == "tier2_deterministic_only"
+        assert debug.get("reason") == "gene_explanation_ai_generated"
 
     def test_source_grounded_not_set_for_default(self):
         result = _vus_ace_call()
@@ -194,13 +198,15 @@ class TestExplicitClinvarQueryAllowed:
         gm = result.get("gene_metadata", {})
         assert gm.get("gene_knowledge_status") == "clinvar_summarized"
 
-    def test_explicit_query_no_ai_draft(self):
+    def test_explicit_query_gene_expl_in_supplemental_card(self):
+        """27.9.6: explicit ClinVar query also resolves gene explanation → supplemental card."""
         result = _vus_ace_call(question="כמה וריאנטים יש בגן ACE במאגר?")
-        assert result.get("unverified_gene_draft") is None
+        assert result.get("unverified_gene_draft") is not None
 
-    def test_explicit_query_no_review_record(self):
+    def test_explicit_query_review_record_created(self):
+        """27.9.6: AI gene explanation is persisted even for explicit ClinVar queries."""
         _vus_ace_call(question="כמה וריאנטים יש בגן ACE במאגר?")
-        assert _get_rdb().list_drafts() == []
+        assert len(_get_rdb().list_drafts()) == 1
 
     def test_explicit_query_variant_count_appears_in_note(self):
         result = _vus_ace_call(question="כמה וריאנטים יש בגן ACE במאגר?")

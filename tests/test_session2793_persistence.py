@@ -123,10 +123,10 @@ def _get_reloaded_rdb():
 # ===========================================================================
 
 class TestVusAcePersistence:
-    """VUS+gene with usable ClinVar metadata must use a deterministic note (no AI draft, no review record)."""
+    """VUS+gene resolver: AI gene explanation generated for tier2, persisted, in supplemental card."""
 
     def _call_known_gene(self):
-        """Call _build_known_gene_answer with mocked gene_index; ACE has 1234 variants + phenotypes."""
+        """Call _build_known_gene_answer; ACE has ClinVar data; LLM mocked to return a draft."""
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
              patch.object(_ce.gene_index, "get_gene_summary", return_value=_FAKE_GENE_SUMMARY), \
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
@@ -135,110 +135,98 @@ class TestVusAcePersistence:
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
-    def test_no_review_draft_id_when_clinvar_note_used(self):
-        """When ClinVar note is generated, review_draft_id must NOT appear in response."""
+    def test_review_draft_id_set_for_ai_gene_expl(self):
+        """27.9.6: resolver generates AI gene explanation → review_draft_id must be set."""
         result = self._call_known_gene()
-        assert result.get("review_draft_id") is None, (
-            "review_draft_id must not be set when ClinVar structured data is available"
+        assert result.get("review_draft_id") is not None, (
+            "review_draft_id must be set when AI gene explanation is generated"
         )
 
-    def test_no_pending_record_in_db_when_clinvar_note_used(self):
-        """No physician review record must be created when ClinVar data is used instead of AI draft."""
+    def test_pending_record_created_for_ai_gene_expl(self):
+        """27.9.6: AI gene explanation is persisted to the physician review queue."""
         self._call_known_gene()
         rdb = _get_reloaded_rdb()
         drafts = rdb.list_drafts(gene_symbol="ACE")
-        assert len(drafts) == 0, (
-            f"Expected 0 review records for ACE (ClinVar grounded), got {len(drafts)}"
+        assert len(drafts) == 1, (
+            f"Expected 1 review record for AI gene explanation, got {len(drafts)}"
         )
 
     def test_no_clinvar_note_in_default_vus_answer(self):
         """Default VUS+gene answer must NOT contain a raw ClinVar statistical note."""
         result = self._call_known_gene()
         assert "במאגר ClinVar קיימות" not in result["answer"], (
-            "Raw ClinVar record count must not appear in default VUS+gene answer"
+            "Raw ClinVar record count must not appear in default VUS+gene main answer"
         )
 
     def test_no_variant_count_in_default_vus_answer(self):
-        """Variant count (e.g. '1,234') must not appear in the main patient answer."""
+        """Variant count must not appear in the main patient answer."""
         result = self._call_known_gene()
         assert "1,234" not in result["answer"] and "1234" not in result["answer"], (
             "Variant counts must stay in gene_metadata, not the main answer"
         )
 
-    def test_no_review_record_in_list_drafts(self):
-        """list_drafts must return empty list after a ClinVar-grounded VUS+ACE call."""
+    def test_review_record_in_list_drafts(self):
+        """list_drafts must return 1 record (AI gene explanation) after a VUS+ACE call."""
         self._call_known_gene()
         rdb = _get_reloaded_rdb()
         all_drafts = rdb.list_drafts()
-        assert all_drafts == [], (
-            f"No physician queue entries expected for ClinVar-grounded answer. Got: {all_drafts}"
+        assert len(all_drafts) == 1, (
+            f"Expected 1 physician queue entry for AI gene explanation. Got: {len(all_drafts)}"
         )
 
-    def test_gene_knowledge_status_clinvar_index_no_expansion(self):
-        """gene_knowledge_status must be 'clinvar_index_no_expansion' for default tier2."""
+    def test_gene_knowledge_status_ai_draft_pending(self):
+        """gene_knowledge_status must be 'ai_draft_pending' when AI gene explanation generated."""
         result = self._call_known_gene()
         gm = result.get("gene_metadata", {})
-        assert gm.get("gene_knowledge_status") == "clinvar_index_no_expansion", (
-            f"Expected 'clinvar_index_no_expansion', got {gm.get('gene_knowledge_status')!r}"
+        assert gm.get("gene_knowledge_status") == "ai_draft_pending", (
+            f"Expected 'ai_draft_pending', got {gm.get('gene_knowledge_status')!r}"
         )
 
-    def test_ai_draft_debug_reason_tier2_deterministic(self):
-        """ai_draft_debug.reason must be 'tier2_deterministic_only' for default VUS+gene."""
+    def test_ai_draft_debug_reason_gene_explanation_ai_generated(self):
+        """ai_draft_debug.reason must be 'gene_explanation_ai_generated'."""
         result = self._call_known_gene()
         debug = result.get("ai_draft_debug", {})
-        assert debug.get("reason") == "tier2_deterministic_only", (
-            f"Expected tier2_deterministic_only, got {debug.get('reason')!r}"
+        assert debug.get("reason") == "gene_explanation_ai_generated", (
+            f"Expected gene_explanation_ai_generated, got {debug.get('reason')!r}"
         )
 
-    def test_no_unverified_gene_draft_when_clinvar_used(self):
-        """unverified_gene_draft must NOT appear in the response when ClinVar note is shown."""
+    def test_unverified_gene_draft_set_in_supplemental_card(self):
+        """27.9.6: unverified_gene_draft must appear in supplemental card (ai_unreviewed path)."""
         result = self._call_known_gene()
-        assert result.get("unverified_gene_draft") is None, (
-            "unverified_gene_draft must not be present when ClinVar grounding is used"
+        assert result.get("unverified_gene_draft") is not None, (
+            "unverified_gene_draft must be set when AI gene explanation is generated"
         )
 
     def test_source_grounded_not_set_for_default_tier2(self):
-        """gene_metadata.source_grounded must NOT be True for default tier2 (no grounding used)."""
+        """gene_metadata.source_grounded must NOT be True for the tier2 AI draft path."""
         result = self._call_known_gene()
         gm = result.get("gene_metadata", {})
-        assert gm.get("source_grounded") is not True, (
-            f"source_grounded must not be True for default tier2 response"
-        )
+        assert gm.get("source_grounded") is not True
 
-    def test_llm_used_false_when_clinvar_summarized(self):
-        """llm_used must remain False when ClinVar structured data is used (no AI expansion)."""
+    def test_llm_used_false_for_main_answer(self):
+        """llm_used must remain False — main VUS answer is deterministic text."""
         result = self._call_known_gene()
-        assert result.get("llm_used") is False, (
-            f"llm_used must be False for ClinVar-grounded response, got {result.get('llm_used')!r}"
-        )
+        assert result.get("llm_used") is False
 
     def test_patient_answer_still_present(self):
-        """The VUS explanation must still be in the main answer (ClinVar note is appended, not replacing)."""
+        """VUS explanation must still appear in the main answer."""
         result = self._call_known_gene()
-        assert "VUS" in result["answer"] or "ממצא" in result["answer"], (
-            "VUS explanation must still appear in the main answer"
-        )
+        assert "VUS" in result["answer"] or "ממצא" in result["answer"]
 
-    def test_no_ai_bridging_note_when_clinvar_summarized(self):
-        """'מידע כללי נוסף' AI bridging note must NOT appear when ClinVar data is used."""
+    def test_no_ai_bridging_note_in_main_answer(self):
+        """'מידע כללי נוסף' bridging note must NOT appear in the main answer."""
         result = self._call_known_gene()
-        assert "מידע כללי נוסף על הגן" not in result["answer"], (
-            "AI bridging note must not appear when ClinVar structured data is used"
-        )
+        assert "מידע כללי נוסף על הגן" not in result["answer"]
 
     def test_no_internal_clinvar_approval_sentence(self):
-        """The internal 'no approved Hebrew summary' sentence must not appear."""
+        """The internal review-architecture sentence must not appear."""
         result = self._call_known_gene()
-        assert "אין עדיין סיכום ביולוגי מאושר בעברית" not in result["answer"], (
-            "Internal review-architecture sentence must not appear in patient-facing answer"
-        )
+        assert "אין עדיין סיכום ביולוגי מאושר בעברית" not in result["answer"]
 
-    def test_no_review_persistence_failed_when_clinvar_used(self):
-        """review_persistence_failed must NOT be set when ClinVar data prevents AI draft."""
+    def test_no_review_persistence_failed_flag(self):
+        """review_persistence_failed must NOT be set when persistence succeeded."""
         result = self._call_known_gene()
-        assert not result.get("review_persistence_failed"), (
-            "review_persistence_failed must not be set when ClinVar path is taken (no draft to persist)"
-        )
+        assert not result.get("review_persistence_failed")
 
 
 # ===========================================================================
