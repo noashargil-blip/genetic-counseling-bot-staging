@@ -187,9 +187,9 @@ class TestBuildVusClinvarNoteHelper:
 # ===========================================================================
 
 class TestVusAceClinvarGrounding:
-    """VUS+gene with usable ClinVar metadata → deterministic note, no AI draft."""
+    """VUS+gene default behavior: phrased educational answer, no ClinVar note, no AI draft."""
 
-    def _call(self, gene_summary=None):
+    def _call(self, gene_summary=None, question="מה המשמעות של VUS בגן ACE?"):
         if gene_summary is None:
             gene_summary = _GENE_SUMMARY_WITH_DATA
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
@@ -198,46 +198,47 @@ class TestVusAceClinvarGrounding:
              patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
              patch.object(_ce.gene_knowledge, "has_approved_gene_knowledge", return_value=False), \
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
-            return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
+            return _ce._build_known_gene_answer("ACE", question=question)
 
     def test_no_unverified_draft_when_clinvar_data_present(self):
         result = self._call()
         assert result.get("unverified_gene_draft") is None, (
-            "unverified_gene_draft must not appear when ClinVar data is available"
+            "unverified_gene_draft must not appear for default VUS+gene"
         )
 
-    def test_clinvar_note_in_answer(self):
+    def test_no_clinvar_note_in_default_vus_answer(self):
+        """Default VUS+gene answer must NOT inject raw ClinVar statistics."""
         result = self._call()
-        assert "ClinVar" in result["answer"], (
-            f"ClinVar note missing from answer: {result['answer'][:200]!r}"
+        assert "במאגר ClinVar קיימות" not in result["answer"], (
+            "ClinVar record count must not appear in default VUS+gene answer"
         )
 
     def test_no_review_draft_id_in_response(self):
         result = self._call()
-        assert result.get("review_draft_id") is None, (
-            "review_draft_id must not be set when ClinVar note replaces AI draft"
-        )
+        assert result.get("review_draft_id") is None
 
     def test_no_pending_record_in_db(self):
         self._call()
         rdb = _get_rdb()
-        assert rdb.list_drafts() == [], "No DB records must be created for ClinVar-grounded answer"
+        assert rdb.list_drafts() == []
 
-    def test_gene_knowledge_status_clinvar_summarized(self):
+    def test_gene_knowledge_status_clinvar_index_no_expansion(self):
         result = self._call()
         gm = result.get("gene_metadata", {})
-        assert gm.get("gene_knowledge_status") == "clinvar_summarized"
+        assert gm.get("gene_knowledge_status") == "clinvar_index_no_expansion", (
+            f"Expected 'clinvar_index_no_expansion', got {gm.get('gene_knowledge_status')!r}"
+        )
 
-    def test_ai_draft_debug_reason_is_clinvar(self):
+    def test_ai_draft_debug_reason_tier2_deterministic(self):
         result = self._call()
         debug = result.get("ai_draft_debug", {})
-        assert debug.get("reason") == "clinvar_structured_data_used_instead"
+        assert debug.get("reason") == "tier2_deterministic_only", (
+            f"Expected tier2_deterministic_only, got {debug.get('reason')!r}"
+        )
 
     def test_vus_explanation_still_in_answer(self):
         result = self._call()
-        assert "VUS" in result["answer"] or "ממצא" in result["answer"], (
-            "VUS explanation must still appear in the answer"
-        )
+        assert "VUS" in result["answer"] or "ממצא" in result["answer"]
 
     def test_llm_used_false(self):
         result = self._call()
@@ -248,16 +249,17 @@ class TestVusAceClinvarGrounding:
         gm = result.get("gene_metadata", {})
         assert gm.get("answer_tier") == "tier2"
 
-    def test_disclaimer_in_answer(self):
+    def test_no_disclaimer_in_default_vus_answer(self):
+        """The ClinVar DB disclaimer must NOT appear in the default VUS+gene answer."""
         result = self._call()
-        assert "אינו מפרש את הממצא האישי שלך" in result["answer"]
-
-    def test_phenotype_only_summary_triggers_clinvar_note(self):
-        """Gene with < 10 variants but with phenotypes must still get a ClinVar note."""
-        result = self._call(gene_summary=_GENE_SUMMARY_ONLY_PHENOTYPES)
-        assert "ClinVar" in result["answer"], (
-            "Phenotype-only summary should still produce a ClinVar note"
+        assert "אינו מפרש את הממצא האישי שלך" not in result["answer"], (
+            "ClinVar disclaimer must not appear in default VUS+gene answer"
         )
+
+    def test_no_clinvar_note_for_phenotype_only_summary(self):
+        """Gene with only phenotypes and few variants must also NOT show ClinVar note by default."""
+        result = self._call(gene_summary=_GENE_SUMMARY_ONLY_PHENOTYPES)
+        assert "במאגר ClinVar קיימות" not in result["answer"]
         assert result.get("unverified_gene_draft") is None
 
 
@@ -266,9 +268,10 @@ class TestVusAceClinvarGrounding:
 # ===========================================================================
 
 class TestVusTier3Fallback:
-    """When no usable ClinVar metadata exists, the AI draft path must be preserved."""
+    """Tier2/3 VUS+gene default: no AI draft, no ClinVar note — only deterministic VUS text."""
 
     def _call_no_data(self):
+        """Tier2 with empty ClinVar summary (gene in index but no useful metadata)."""
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
              patch.object(_ce.gene_index, "get_gene_summary", return_value=_GENE_SUMMARY_NO_DATA), \
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
@@ -278,6 +281,7 @@ class TestVusTier3Fallback:
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
     def _call_not_in_index(self):
+        """Tier3: gene not in ClinVar index at all."""
         with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
              patch.object(_ce.gene_index, "get_gene_summary", return_value=None), \
              patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
@@ -286,26 +290,25 @@ class TestVusTier3Fallback:
              patch.object(_ce, "_generate_unverified_gene_draft", return_value=_FAKE_DRAFT_ACE):
             return _ce._build_known_gene_answer("ACE", question="מה המשמעות של VUS בגן ACE?")
 
-    def test_ai_draft_attempted_when_no_clinvar_data(self):
+    def test_no_ai_draft_when_no_clinvar_data(self):
+        """Tier2 with empty data must also return no AI draft (AI drafts removed from VUS+gene path)."""
         result = self._call_no_data()
-        assert result.get("unverified_gene_draft") is not None, (
-            "AI draft must still be generated when ClinVar has no usable data"
+        assert result.get("unverified_gene_draft") is None, (
+            "AI draft must NOT be generated in tier2 default path (27.9.5 policy)"
         )
 
-    def test_review_record_created_when_no_clinvar_data(self):
-        result = self._call_no_data()
+    def test_no_review_record_when_no_clinvar_data(self):
+        """No physician review record must be created for tier2 with empty metadata."""
+        self._call_no_data()
         rdb = _get_rdb()
-        drafts = rdb.list_drafts()
-        assert len(drafts) == 1, (
-            f"Review record must be created when no ClinVar data available, got {len(drafts)}"
-        )
+        assert rdb.list_drafts() == [], "No review records must be created for tier2 default"
 
     def test_no_clinvar_note_when_tier3(self):
         """Tier3 (not in index at all) must not have a ClinVar note in the answer."""
         result = self._call_not_in_index()
         assert result.get("gene_metadata", {}).get("answer_tier") == "tier3"
-        assert "ClinVar" not in result["answer"] or "מאגר ClinVar" not in result["answer"], (
-            "ClinVar note must not appear for tier3 gene (not in index)"
+        assert "במאגר ClinVar קיימות" not in result["answer"], (
+            "ClinVar count note must not appear for tier3 gene"
         )
 
     def test_tier3_vus_explanation_present(self):
@@ -500,3 +503,117 @@ class TestClinvarGroundingRegressions:
         note = _ce._build_vus_clinvar_gene_note("ACE", summary)
         assert note is not None
         assert "1,628" in note, f"Expected comma-formatted count. Note: {note!r}"
+
+
+# ===========================================================================
+# Group 7: Explicit ClinVar database queries — statistical note allowed
+# ===========================================================================
+
+class TestVusExplicitClinvarQuery:
+    """Explicit ClinVar database questions (e.g. 'כמה וריאנטים יש במאגר?') must
+    return a cleaned statistical note; the default VUS question must NOT."""
+
+    def _call(self, question):
+        with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
+             patch.object(_ce.gene_index, "get_gene_summary", return_value=_GENE_SUMMARY_WITH_DATA), \
+             patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "has_approved_gene_knowledge", return_value=False), \
+             patch.object(_ce, "_generate_unverified_gene_draft", return_value=None):
+            return _ce._build_known_gene_answer("ACE", question=question)
+
+    def test_explicit_query_token_clinvar_detected(self):
+        assert _ce._is_explicit_clinvar_db_query("כמה וריאנטים יש בגן ACE?") is True
+
+    def test_explicit_query_token_records_detected(self):
+        assert _ce._is_explicit_clinvar_db_query("כמה רשומות יש ב-ACE ב-ClinVar?") is True
+
+    def test_explicit_query_token_classifications_detected(self):
+        assert _ce._is_explicit_clinvar_db_query("אילו סיווגים יש לגן ACE?") is True
+
+    def test_default_vus_question_not_detected(self):
+        assert _ce._is_explicit_clinvar_db_query("מה המשמעות של VUS בגן ACE?") is False
+
+    def test_followup_question_not_detected(self):
+        assert _ce._is_explicit_clinvar_db_query("מה כדאי לעשות עם זה?") is False
+
+    def test_explicit_query_produces_clinvar_note_in_answer(self):
+        """An explicit ClinVar database question must include the note."""
+        result = self._call("כמה וריאנטים יש בגן ACE במאגר?")
+        assert "במאגר ClinVar קיימות" in result["answer"], (
+            f"Explicit ClinVar query must show note. Answer: {result['answer'][:300]!r}"
+        )
+
+    def test_explicit_query_gene_knowledge_status_clinvar_summarized(self):
+        result = self._call("כמה וריאנטים יש בגן ACE במאגר?")
+        gm = result.get("gene_metadata", {})
+        assert gm.get("gene_knowledge_status") == "clinvar_summarized", (
+            f"Expected 'clinvar_summarized', got {gm.get('gene_knowledge_status')!r}"
+        )
+
+    def test_explicit_query_no_semicolons_in_answer(self):
+        """Phenotype strings with semicolons must be split and cleaned."""
+        summary = dict(_GENE_SUMMARY_WITH_DATA)
+        summary["phenotypes"] = ["Disease A;Disease B;not specified"]
+        with patch.object(_ce.gene_index, "_GENE_INDEX_AVAILABLE", True), \
+             patch.object(_ce.gene_index, "get_gene_summary", return_value=summary), \
+             patch.object(_ce.gene_cards, "get_approved_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "get_gene_patient_summary", return_value=None), \
+             patch.object(_ce.gene_knowledge, "has_approved_gene_knowledge", return_value=False), \
+             patch.object(_ce, "_generate_unverified_gene_draft", return_value=None):
+            result = _ce._build_known_gene_answer("ACE", question="כמה וריאנטים יש בגן ACE?")
+        assert ";" not in result["answer"], (
+            f"Semicolons must not appear in the ClinVar note. Answer: {result['answer']!r}"
+        )
+
+    def test_default_vus_question_still_no_clinvar_note(self):
+        """Default VUS+gene question must still produce no ClinVar note."""
+        result = self._call("מה המשמעות של VUS בגן ACE?")
+        assert "במאגר ClinVar קיימות" not in result["answer"]
+
+    def test_explicit_query_no_unverified_draft(self):
+        """Explicit ClinVar query must not generate an AI draft either."""
+        result = self._call("כמה וריאנטים יש בגן ACE במאגר?")
+        assert result.get("unverified_gene_draft") is None
+
+
+# ===========================================================================
+# Group 8: _clean_clinvar_phenotypes helper — unit tests
+# ===========================================================================
+
+class TestCleanClinvarPhenotypes:
+    """Unit tests for the _clean_clinvar_phenotypes deduplication helper."""
+
+    def test_splits_semicolons(self):
+        cleaned = _ce._clean_clinvar_phenotypes(["Alpha disease;Beta syndrome;Gamma disorder"])
+        assert "Alpha disease" in cleaned
+        assert "Beta syndrome" in cleaned
+        assert "Gamma disorder" in cleaned
+
+    def test_deduplicates(self):
+        cleaned = _ce._clean_clinvar_phenotypes(["Disease X", "Disease X"])
+        assert cleaned.count("Disease X") == 1
+
+    def test_filters_trivial_entries(self):
+        cleaned = _ce._clean_clinvar_phenotypes(["not specified", "not provided", "Real disease"])
+        assert "not specified" not in cleaned
+        assert "not provided" not in cleaned
+        assert "Real disease" in cleaned
+
+    def test_strips_whitespace(self):
+        cleaned = _ce._clean_clinvar_phenotypes(["  Hypertension  "])
+        assert "Hypertension" in cleaned
+
+    def test_filters_very_short_entries(self):
+        cleaned = _ce._clean_clinvar_phenotypes(["AB", "Real disease"])
+        assert "AB" not in cleaned
+
+    def test_empty_input(self):
+        assert _ce._clean_clinvar_phenotypes([]) == []
+
+    def test_none_input(self):
+        assert _ce._clean_clinvar_phenotypes(None) == []
+
+    def test_deduplicates_case_insensitively(self):
+        cleaned = _ce._clean_clinvar_phenotypes(["Hypertension", "hypertension"])
+        assert len([x for x in cleaned if x.lower() == "hypertension"]) == 1

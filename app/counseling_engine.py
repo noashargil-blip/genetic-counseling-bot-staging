@@ -264,6 +264,30 @@ _CLINVAR_NOTE_TRIVIAL_PHENOS = frozenset({
 })
 
 
+def _clean_clinvar_phenotypes(raw_phenotypes: list) -> list:
+    """
+    Clean raw ClinVar phenotype strings for patient-facing display.
+
+    ClinVar often concatenates multiple conditions with semicolons in a single
+    phenotype entry. This helper splits them, strips whitespace, deduplicates
+    (case-insensitive), and removes trivial placeholder strings.
+    """
+    seen: set = set()
+    cleaned: list = []
+    for p in (raw_phenotypes or []):
+        for part in p.split(";"):
+            part = part.strip()
+            if not part or len(part) <= 4:
+                continue
+            key = part.lower()
+            if key in _CLINVAR_NOTE_TRIVIAL_PHENOS:
+                continue
+            if key not in seen:
+                seen.add(key)
+                cleaned.append(part)
+    return cleaned
+
+
 def _format_vus_significance_note(by_sig: dict) -> str:
     """Return a short Hebrew sentence describing which significance categories are present."""
     if not by_sig:
@@ -305,22 +329,23 @@ def _build_vus_clinvar_gene_note(gene: str, g_summary: Optional[dict]) -> Option
     Build a deterministic source-grounded Hebrew note about a gene's ClinVar profile.
 
     Uses ONLY trusted structured fields: total_variants, by_significance, phenotypes.
+    Phenotype strings are cleaned via _clean_clinvar_phenotypes (splits semicolons,
+    deduplicates, removes trivial entries).
     Does NOT invent biological mechanisms or pathway information.
     Returns None when no usable metadata is available (< 10 variants and no phenotypes),
     so the caller can fall through to alternative paths.
     Always appends a disclaimer that this describes DB records, not the user's variant.
+
+    NOTE: This function must only be called for EXPLICIT ClinVar database queries
+    (e.g. "כמה וריאנטים יש ב-ACE?").  It must NOT be called for generic VUS+gene
+    questions — ClinVar technical data stays in gene_metadata / the technical card.
     """
     if not g_summary:
         return None
     total = g_summary.get("total_variants") or 0
     by_sig = g_summary.get("by_significance") or {}
-    raw_phenotypes = [
-        p.strip()
-        for p in (g_summary.get("phenotypes") or [])[:8]
-        if p and len(p.strip()) > 4
-        and p.strip().lower() not in _CLINVAR_NOTE_TRIVIAL_PHENOS
-    ]
-    if total < 10 and not raw_phenotypes:
+    cleaned_phenotypes = _clean_clinvar_phenotypes(g_summary.get("phenotypes") or [])
+    if total < 10 and not cleaned_phenotypes:
         return None
     sentences = []
     if total >= 10:
@@ -330,17 +355,38 @@ def _build_vus_clinvar_gene_note(gene: str, g_summary: Optional[dict]) -> Option
     sig_note = _format_vus_significance_note(by_sig)
     if sig_note:
         sentences.append(sig_note)
-    if raw_phenotypes:
-        if len(raw_phenotypes) == 1:
-            sentences.append(f"בין המצבים המדווחים במאגר: {raw_phenotypes[0]}.")
+    if cleaned_phenotypes:
+        if len(cleaned_phenotypes) == 1:
+            sentences.append(f"בין המצבים המדווחים במאגר: {cleaned_phenotypes[0]}.")
         else:
             sentences.append(
-                f"בין המצבים המדווחים במאגר: {raw_phenotypes[0]} ו-{raw_phenotypes[1]}."
+                f"בין המצבים המדווחים במאגר: {cleaned_phenotypes[0]} ו-{cleaned_phenotypes[1]}."
             )
     sentences.append(
         "מידע זה מתאר את הרשומות במאגר ואינו מפרש את הממצא האישי שלך."
     )
     return " ".join(sentences)
+
+
+_CLINVAR_EXPLICIT_QUERY_TOKENS = frozenset({
+    "clinvar", "כמה וריאנטים", "כמה רשומות", "אילו סיווגים",
+    "אילו מצבים", "מה יש במאגר", "ב-clinvar", "במאגר clinvar",
+    "וריאנטים ב", "variants ב",
+})
+
+
+def _is_explicit_clinvar_db_query(question: str) -> bool:
+    """
+    Return True when the question explicitly asks about ClinVar database records
+    (counts, classification breakdown, or reported conditions).
+
+    Used inside _build_known_gene_answer() to decide whether to include a
+    statistical ClinVar note in the VUS+gene response.  Generic VUS+gene
+    questions ("מה המשמעות של VUS בגן ACE?") return False — ClinVar data
+    stays in gene_metadata / the technical card for those questions.
+    """
+    q = question.lower()
+    return any(token in q for token in _CLINVAR_EXPLICIT_QUERY_TOKENS)
 
 
 def _build_known_gene_answer(gene: str, question: str = "", include_unverified_gene_draft: bool = False) -> dict:
@@ -475,13 +521,21 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         "gene_metadata": gene_meta,
     }
     if gene_meta["answer_tier"] == "tier2":
-        # Part C (27.9.4): prefer ClinVar structured metadata before AI draft.
-        # If usable metadata is available (variant count / phenotypes), formulate
-        # a deterministic source-grounded note — no physician review needed.
-        # Only fall through to AI expansion when no usable ClinVar data is present.
-        _clinvar_note = _build_vus_clinvar_gene_note(gene, g_summary)
+        # Part A/B (27.9.5): ClinVar technical data belongs in gene_metadata and the
+        # technical card only — NOT in the main patient-facing answer by default.
+        #
+        # For generic VUS+gene questions the answer is the deterministic educational
+        # text already assembled above (opening + vus_practical paragraph).  No AI
+        # biology draft is generated and no physician review record is created.
+        #
+        # Exception: when the question explicitly asks for ClinVar database statistics
+        # ("כמה וריאנטים יש ב-ACE?", "אילו סיווגים קיימים?", etc.) a cleaned
+        # statistical note is appended.  Even then, no AI draft is generated.
+        _clinvar_note: Optional[str] = None
+        if _is_explicit_clinvar_db_query(question) and g_summary:
+            _clinvar_note = _build_vus_clinvar_gene_note(gene, g_summary)
         if _clinvar_note:
-            # Tier 2a: ClinVar structured data available → deterministic note, no AI expansion.
+            # Explicit ClinVar database query: include cleaned statistical note.
             result["answer"] += f"\n\n{_clinvar_note}"
             gene_meta["gene_knowledge_status"] = "clinvar_summarized"
             gene_meta["source_grounded"] = True
@@ -492,54 +546,20 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
                 "attempted": False,
                 "generated": False,
                 "shown": False,
-                "reason": "clinvar_structured_data_used_instead",
+                "reason": "clinvar_explicit_query_summarized",
             }
         else:
-            # Tier 2b: no usable ClinVar metadata → attempt AI biology expansion.
-            _vus_draft_debug: dict = {}
-            draft = _generate_unverified_gene_draft(
-                gene, question, clinvar_context=g_summary, use_lenient_validator=True,
-                _debug=_vus_draft_debug,
-            )
-            draft_ok = draft is not None
-            gene_meta["unverified_gene_draft_available"] = draft_ok
-            gene_meta["ai_draft_attempted"] = _vus_draft_debug.get("attempted", False)
-            gene_meta["ai_draft_generated"] = draft_ok
-            if draft_ok:
-                result["llm_used"] = True
-                result["llm_mode"] = "draft_openai"
-                result["answer"] += f"\n\nמידע כללי נוסף על הגן {gene} מופיע בהמשך."
-                result["unverified_gene_draft"] = draft
-                result["ai_draft_debug"] = {
-                    "attempted": True,
-                    "generated": True,
-                    "shown": True,
-                    "provider": _vus_draft_debug.get("provider", "unknown"),
-                }
-                _vus_persist_record = _persist_reviewable_ai_expansion(
-                    draft,
-                    draft_type="gene_summary",
-                    normalized_intent="vus_known_gene",
-                    gene_symbol=gene,
-                    model_provider=_vus_draft_debug.get("provider"),
-                    source_metadata={
-                        "ai_content_type": "medical_educational_ai_expansion",
-                        "source_basis": "model_expansion_with_clinvar_gene_context",
-                        "source_grounded": False,
-                        "requires_physician_review": True,
-                        "answer_tier": "tier2",
-                        "total_variants": g_summary.get("total_variants") if g_summary else None,
-                    },
-                )
-                _attach_review_metadata(result, _vus_persist_record)
-            else:
-                result["ai_draft_debug"] = _vus_draft_debug or {
-                    "attempted": False,
-                    "generated": False,
-                    "shown": False,
-                    "reason": "llm_not_configured_or_unknown",
-                }
-                result["ai_draft_debug"].setdefault("shown", False)
+            # Default: deterministic VUS explanation only — no note, no AI expansion.
+            gene_meta["gene_knowledge_status"] = "clinvar_index_no_expansion"
+            gene_meta["ai_draft_attempted"] = False
+            gene_meta["ai_draft_generated"] = False
+            gene_meta["unverified_gene_draft_available"] = False
+            result["ai_draft_debug"] = {
+                "attempted": False,
+                "generated": False,
+                "shown": False,
+                "reason": "tier2_deterministic_only",
+            }
     return result
 
 # ---------------------------------------------------------------------------
