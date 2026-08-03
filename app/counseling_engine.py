@@ -363,14 +363,19 @@ REPRODUCTIVE_DECISION_HE = (
 _REPRODUCTIVE_DECISION_TERMS = [
     "הפלה", "להפיל", "הפסקת הריון", "להפסיק הריון",
     "להפסיק את ההריון", "להפסיק את הריון",
+    "להפסיק את ההיריון", "להפסיק את היריון",  # yod-variant spelling
     "לסיים הריון", "לסיים את ההריון", "לסיים את הריון",
+    "לסיים את ההיריון", "לסיים את היריון",  # yod-variant spelling
     "סיום הריון", "הפסקה של הריון",
+    "הפסקת היריון",  # yod-variant spelling
     "termination", "abortion",
 ]
 
+# ה{0,2}(?:יר|ר)יון matches all Hebrew variants of "pregnancy":
+# הריון, היריון (yod-variant), ההריון (with article), ההיריון (article + yod-variant)
 _REPRODUCTIVE_DECISION_RE = re.compile(
-    r"הפל[הת]|להפיל|הפסקת\s+הריון|להפסיק\s+(?:את\s+)?ה?הריון"
-    r"|לסיים\s+(?:את\s+)?ה?הריון|סיום\s+הריון"
+    r"הפל[הת]|להפיל|הפסקת\s+ה{0,2}(?:יר|ר)יון|להפסיק\s+(?:את\s+)?ה{0,2}(?:יר|ר)יון"
+    r"|לסיים\s+(?:את\s+)?ה{0,2}(?:יר|ר)יון|סיום\s+ה{0,2}(?:יר|ר)יון"
     r"|termination|abortion",
     re.IGNORECASE,
 )
@@ -5381,9 +5386,13 @@ def _answer_question_impl(
         return _build_trisomy21_answer()
 
     # B.7. General chromosomal / cytogenetic educational answer.
+    # Pass chromosome_number from session context so that follow-up turns
+    # like "אמרו שזה mosaic" (after a chr21 first turn) include the number.
     if intent == "chromosome_education":
+        _b7_chr_num = (session_context or {}).get("chromosome_number")
         return _build_chromosome_education_answer(
-            text, intent_info.get("sub_intent", "chromosome_finding_general")
+            text, intent_info.get("sub_intent", "chromosome_finding_general"),
+            chromosome_number=_b7_chr_num,
         )
 
     # C. Specific named variant (HGVS / rsID) — educational evidence summary,
