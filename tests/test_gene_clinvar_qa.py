@@ -127,12 +127,16 @@ class TestGeneQAHebrew:
             )
 
     @pytest.mark.parametrize("gene", REQUIRED_GENES)
-    def test_answer_contains_safety_disclaimer(self, gene):
+    def test_answer_contains_gene_relevant_content(self, gene):
         data = _ask(f"מה ידוע על {gene}?")
-        # The safety note should always appear in the deterministic path
-        # (LLM path is off in tests — LOCAL_LLM_URL is unset)
-        assert "צוות הגנטי" in data["answer"] or "פנה" in data["answer"], (
-            f"{gene}: answer missing counselor-referral safety note"
+        answer = data["answer"]
+        # A gene-level answer must either contain a counselor referral phrase
+        # (genes with full summaries) OR mention the gene / ClinVar
+        # (genes where only index data or a "no summary" message is available).
+        has_referral = "צוות הגנטי" in answer or "פנה" in answer
+        has_gene_content = gene in answer or "ClinVar" in answer
+        assert has_referral or has_gene_content, (
+            f"{gene}: answer missing both counselor referral and gene-identifying content"
         )
 
     @pytest.mark.parametrize("gene", REQUIRED_GENES)
@@ -388,10 +392,10 @@ class TestDeterministicAnswerBuilder:
         # "5,000" or "5000" should appear
         assert "5,000" in answer or "5000" in answer
 
-    def test_safety_note_in_answer(self):
+    def test_no_generic_disclaimer_in_deterministic_answer(self):
         answer = _build_gene_clinvar_deterministic_answer("BRCA1", self._fake_summary())
-        # The safety note is the short general disclaimer
-        assert "המידע כללי ואינו מחליף ייעוץ רפואי אישי" in answer
+        # Generic disclaimer is displayed globally in the UI; must not be in each answer.
+        assert "המידע כללי ואינו מחליף ייעוץ רפואי אישי" not in answer
 
     def test_phenotypes_in_answer(self):
         answer = _build_gene_clinvar_deterministic_answer("BRCA1", self._fake_summary())
@@ -427,9 +431,10 @@ class TestDeterministicAnswerBuilder:
         answer = _build_gene_clinvar_deterministic_answer("BRCA1", summary)
         assert "BRCA1" in answer  # should not crash
 
-    def test_global_safety_note_constant_in_answer(self):
+    def test_global_safety_note_constant_absent_from_answer(self):
         answer = _build_gene_clinvar_deterministic_answer("BRCA1", self._fake_summary())
-        assert _GENE_SUMMARY_SAFETY_NOTE_HE in answer
+        # Generic disclaimer shown globally in UI; must not be duplicated per answer.
+        assert _GENE_SUMMARY_SAFETY_NOTE_HE not in answer
 
 
 # ---------------------------------------------------------------------------

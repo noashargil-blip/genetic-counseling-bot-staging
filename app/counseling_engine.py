@@ -1322,6 +1322,15 @@ def _build_variant_evidence_answer(question: str) -> dict:
 # a Hebrew prefix directly attached ("בHBB", "ב-HBB") are still detected.
 _GENE_SYMBOL_CANDIDATE_RE = re.compile(r"(?<![A-Za-z])([A-Z][A-Z0-9]{1,9})(?![a-zA-Z])")
 
+# Regex to extract gene symbols from explicit "בגן X" or "הגן X" Hebrew phrases.
+# Supports mixed-case HGNC-style symbols (e.g. C12orf57, KIAA2022) that are
+# NOT matched by _GENE_SYMBOL_CANDIDATE_RE, which requires all-uppercase tokens.
+# Conservative: 3–15 chars, starts with uppercase, letters and digits only.
+_EXPLICIT_GENE_PHRASE_RE = re.compile(
+    r"(?:בגן|הגן)\s+([A-Z][A-Za-z0-9]{2,14})(?=[^A-Za-z0-9]|$)",
+    re.UNICODE,
+)
+
 # Well-known abbreviations that are NOT gene symbols — skip index lookup for these.
 _NON_GENE_TOKENS: frozenset[str] = frozenset({
     "VUS", "DNA", "RNA", "MRNA", "CDNA", "GDNA", "SNP", "SNV",
@@ -1340,6 +1349,31 @@ def _is_standalone_gene_query(text: str, gene: str) -> bool:
     if re.match(r'^[א-ת]-?' + re.escape(g) + r'$', stripped, re.IGNORECASE):
         return True
     return False
+
+
+def _extract_gene_from_explicit_phrase(text: str) -> "Optional[str]":
+    """
+    Extract a gene symbol from explicit Hebrew phrases 'בגן X' or 'הגן X'.
+
+    Supports HGNC-style mixed-case symbols such as C12orf57 (which contain
+    lowercase letters and are NOT matched by _GENE_SYMBOL_CANDIDATE_RE).
+    Does not require the gene to exist in the local ClinVar index.
+
+    Returns the extracted symbol (preserving original casing) or None.
+    """
+    m = _EXPLICIT_GENE_PHRASE_RE.search(text)
+    if not m:
+        return None
+    sym = m.group(1)
+    if sym.upper() in _NON_GENE_TOKENS:
+        return None
+    # Require digit OR ≥2 uppercase letters to avoid false positives
+    # (e.g. ordinary Hebrew words transliterated in Latin letters).
+    has_digit = any(c.isdigit() for c in sym)
+    uppercase_count = sum(1 for c in sym if c.isupper())
+    if not (has_digit or uppercase_count >= 2):
+        return None
+    return sym
 
 
 # Intent phrases: signal the user is asking about a gene's general profile.
@@ -1407,6 +1441,12 @@ _GENE_QUESTION_PHRASES: frozenset[str] = frozenset([
     "associated with",
     "disease association",
     "clinical conditions",
+    # Gene-function intent — "איך הגן BRCA1 פועל בגוף?", "מה עושה הגן KIAA2022?"
+    # Without these, the question falls to the generic what_is_gene KB entry
+    # instead of routing to the gene-specific explanation pipeline.
+    "איך הגן",         # "how does gene X work?" — explicit gene reference
+    "מה עושה הגן",     # "what does gene X do?" — explicit gene reference
+    "מה עושה ה",       # "what does the ... do?" — covers "מה עושה הגן"
 ])
 
 # Phrases that signal the user is asking about "the mutation" (singular) of a gene.
@@ -3655,6 +3695,9 @@ _GENERAL_EDU_INTENT_PHRASES: tuple = (
     "define ",
     "what does",
     "what's the difference",
+    # Historical / discovery questions — "מתי גילו את הגנום?" must reach
+    # general educational AI, not KB gene-count entries.
+    "מתי ",
 )
 
 # Additional personal / high-stakes signals NOT caught by safety.py step 3.
@@ -3854,6 +3897,15 @@ def _classify_general_question(question: str) -> str:
     - "out_of_scope": unclear; use standard helpful fallback
     """
     lower = question.strip().lower()
+
+    # Guard: VUS + plausible gene-symbol must NEVER classify as safe general
+    # education — these queries belong in the VUS + gene pipeline.
+    # This is a belt-and-suspenders check; step E of classify_question_intent
+    # should catch these first via _extract_gene_from_explicit_phrase.
+    if _mentions_vus(question) and (
+        _detect_known_gene(question) or _extract_gene_from_explicit_phrase(question)
+    ):
+        return "out_of_scope"
 
     # Out-of-domain: clearly non-genetics/medicine → skip AI, use short message
     if _detect_out_of_domain(question):
@@ -4641,7 +4693,9 @@ def _extract_gene_symbol_from_question(text: str) -> Optional[str]:
         return known
 
     if not gene_index._GENE_INDEX_AVAILABLE:
-        return None
+        # Fallback: extract from "בגן X" / "הגן X" Hebrew phrases (supports
+        # mixed-case HGNC symbols such as C12orf57).
+        return _extract_gene_from_explicit_phrase(text)
 
     candidates = _GENE_SYMBOL_CANDIDATE_RE.findall(text)
     found: list[str] = []
@@ -4650,7 +4704,11 @@ def _extract_gene_symbol_from_question(text: str) -> Optional[str]:
             continue
         if gene_index.get_gene_summary(c) is not None:
             found.append(c)
-    return found[0] if len(found) == 1 else None
+    if len(found) == 1:
+        return found[0]
+    # Extended fallback: "בגן X" / "הגן X" — for mixed-case symbols not matched
+    # by _GENE_SYMBOL_CANDIDATE_RE (which requires all-uppercase tokens).
+    return _extract_gene_from_explicit_phrase(text)
 
 
 def _is_gene_level_question(text: str) -> bool:
@@ -5653,6 +5711,12 @@ def classify_question_intent(
             gene_in_text, corrected_from_ci = _extract_gene_with_correction(text)
         if gene_in_text is None:
             gene_in_text = _detect_known_gene(text)
+        # Extended fallback: extract from "בגן X" / "הגן X" Hebrew phrases.
+        # Supports mixed-case HGNC symbols (C12orf57, KIAA2022) that the
+        # index-based extractor misses because _GENE_SYMBOL_CANDIDATE_RE
+        # requires all-uppercase tokens.
+        if gene_in_text is None:
+            gene_in_text = _extract_gene_from_explicit_phrase(text)
         if gene_in_text and (
             _is_gene_level_question(text)
             or _is_standalone_gene_query(text, gene_in_text)
@@ -5906,9 +5970,21 @@ def _answer_question_impl(
     # Guard (27.9.1 Part C): reject what_is_gene for non-human biology questions
     # only (e.g. sea turtle, dog chromosomes).  Human questions like "מה זה גן?"
     # or "כמה גנים יש בבן אדם?" must still reach the KB answer.
+    # Extended (27.9.8): also reject when an explicit gene symbol is present —
+    # "איך הגן BRCA1 פועל?" must route to gene-specific pipeline, not generic definition.
     if entry is not None and entry.get("id") == "what_is_gene":
         _lower_q = text.lower()
         if any(sig in _lower_q for sig in _NON_HUMAN_BIOLOGY_ORGANISMS):
+            entry = None
+        elif _detect_known_gene(text) or _extract_gene_from_explicit_phrase(text):
+            entry = None  # specific gene present → route to gene-specific pipeline
+    # Guard (27.9.8): reject human_genome_size for history/discovery questions.
+    # "מתי גילו את הגנום?" is NOT asking how many genes there are; fuzzy difflib
+    # matches "גנום" to this entry's keywords ("גנום אנושי").
+    if entry is not None and entry.get("id") == "human_genome_size":
+        _lower_q = text.lower()
+        _count_signals = ("כמה", "מספר", "how many", "number of")
+        if not any(sig in _lower_q for sig in _count_signals):
             entry = None
     # Guard (27.9.1 Part D): reject penetrance when the question is about
     # carrier screening / ancestry-related testing — fuzzy difflib incorrectly
