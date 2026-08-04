@@ -392,6 +392,7 @@ def _is_explicit_clinvar_db_query(question: str) -> bool:
 def _resolve_gene_explanation_for_vus(
     gene: str,
     question: str = "",
+    gene_summary: "Optional[dict]" = None,
 ) -> dict:
     """
     Universal priority chain for resolving a patient-friendly gene explanation.
@@ -401,17 +402,23 @@ def _resolve_gene_explanation_for_vus(
     determined by available content, not by gene identity.
 
     Priority (highest first):
-      1. curated          — gene_cards approved text  → main answer, no review record
-      2. grounded         — gene_knowledge KB text    → main answer, no review record
-      3. physician_approved — review_db approved draft → main answer, no new record
-      4. ai_unreviewed    — generate AI biology draft, persist → supplemental card only
-      5. none             — LLM unavailable/failed    → VUS-only answer
+      1. curated           — gene_cards approved text         → main answer, no review record
+      2. grounded          — gene_knowledge KB text           → main answer, no review record
+      3. grounded_clinvar  — source-grounded ClinVar summary  → main answer, no review record
+                             (same path as standalone gene route; uses phenotypes + LLM)
+      4. physician_approved — review_db approved draft        → main answer, no new record
+      5. ai_unreviewed     — generate AI biology draft, persist → supplemental card only
+      6. none              — LLM unavailable/failed           → VUS-only answer
+
+    Passes ``gene_summary`` (the ClinVar index summary dict) to the grounded_clinvar
+    step so it can use phenotype associations — exactly the same evidence used by
+    the standalone gene-biology route (_build_gene_clinvar_answer).
 
     Returns:
       {
         "text_he":         Optional[str],
-        "source_type":     "curated"|"grounded"|"physician_approved"|
-                           "ai_unreviewed"|"none",
+        "source_type":     "curated"|"grounded"|"grounded_clinvar"|
+                           "physician_approved"|"ai_unreviewed"|"none",
         "review_draft_id": Optional[str],
         "review_status":   Optional[str],
         "approved":        Optional[bool],
@@ -442,7 +449,25 @@ def _resolve_gene_explanation_for_vus(
             "vus_note_he": gene_knowledge.get_gene_vus_note(gene),
         }
 
-    # 3. Physician-approved gene summary already in review_db
+    # 3. Source-grounded ClinVar summary — same pipeline as the standalone
+    #    gene-biology route (_build_gene_clinvar_answer tier-2 grounded path).
+    #    Uses ClinVar phenotype associations (≥3 non-trivial) and/or GK biology
+    #    context to produce a short LLM-phrased patient-facing summary.
+    #    No physician review required (AI_CONTENT_TYPE_GROUNDED classification).
+    _has_grounded, _grounded_ctx = _has_sufficient_grounded_gene_context(gene, gene_summary)
+    if _has_grounded:
+        _grounded_text = _generate_source_grounded_gene_answer(gene, _grounded_ctx)
+        if _grounded_text:
+            return {
+                "text_he": _grounded_text,
+                "source_type": "grounded_clinvar",
+                "review_draft_id": None,
+                "review_status": None,
+                "approved": True,
+                "vus_note_he": None,
+            }
+
+    # 4. Physician-approved gene summary already in review_db
     try:
         from app import review_db as _rdb_vus
         _approved_rec = _rdb_vus.get_approved_draft(gene, "gene_summary")
@@ -460,7 +485,7 @@ def _resolve_gene_explanation_for_vus(
                 "vus_note_he": None,
             }
 
-    # 4. Generate AI gene biology summary, persist to physician review queue
+    # 5. Generate AI gene biology summary, persist to physician review queue
     _ai_draft = _generate_unverified_gene_draft(
         gene,
         question=question,
@@ -484,7 +509,7 @@ def _resolve_gene_explanation_for_vus(
             "vus_note_he": None,
         }
 
-    # 5. Nothing available (LLM not configured or failed)
+    # 6. Nothing available (LLM not configured or failed)
     return {
         "text_he": None,
         "source_type": "none",
@@ -516,14 +541,16 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
     # ClinVar stats for gene_metadata technical card — never in main answer by default
     g_summary = gene_index.get_gene_summary(gene) if gene_index._GENE_INDEX_AVAILABLE else None  # noqa: F821
 
-    # Universal gene-explanation resolution (priority 1→5)
-    gene_expl = _resolve_gene_explanation_for_vus(gene, question=question)
+    # Universal gene-explanation resolution (priority 1→6)
+    # Pass g_summary so the grounded_clinvar step can use ClinVar phenotypes —
+    # the same evidence used by the standalone gene-biology route.
+    gene_expl = _resolve_gene_explanation_for_vus(gene, question=question, gene_summary=g_summary)
     expl_source: str = gene_expl["source_type"]
     expl_text: Optional[str] = gene_expl["text_he"]
     expl_vus_note: Optional[str] = gene_expl.get("vus_note_he")
 
     # Compose VUS answer
-    if expl_source in ("curated", "grounded", "physician_approved"):
+    if expl_source in ("curated", "grounded", "grounded_clinvar", "physician_approved"):
         # Concise VUS opening (gene explanation follows in main answer)
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
@@ -561,6 +588,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
     _tier_map = {
         "curated": "tier1",
         "grounded": "tier1b",
+        "grounded_clinvar": "tier2",  # ClinVar-phenotype-grounded, same as standalone tier2
         "physician_approved": "tier2p",
     }
     answer_tier = _tier_map.get(expl_source, "tier2" if g_summary is not None else "tier3")
@@ -568,6 +596,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
     _status_map = {
         "curated": "approved",
         "grounded": "approved",
+        "grounded_clinvar": "grounded",
         "physician_approved": "physician_approved",
         "ai_unreviewed": "ai_draft_pending",
         "none": "clinvar_index_no_expansion" if g_summary is not None else "missing",
@@ -577,20 +606,25 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
     _ds_map = {
         "curated": "Curated educational content" + (" + ClinVar" if g_summary else ""),
         "grounded": "Gene Knowledge Base",
+        "grounded_clinvar": "ClinVar (NCBI) via local gene index",
         "physician_approved": "Physician-approved summary",
     }
     data_source = _ds_map.get(expl_source, "ClinVar (NCBI) via local gene index")
 
+    # grounded_clinvar uses the same LLM-phrasing step as the standalone gene route
+    _llm_used_for_expl = expl_source == "grounded_clinvar"
+
     gene_meta: dict = {
         "gene_symbol": gene,
         "data_source": data_source,
-        "llm_used": False,
-        "fallback_used": True,
+        "llm_used": _llm_used_for_expl,
+        "fallback_used": not _llm_used_for_expl,
         "total_variants": g_summary.get("total_variants") if g_summary else None,
         "found_in_index": g_summary is not None,
         "answer_tier": answer_tier,
         "gene_knowledge_status": gene_knowledge_status,
         "gene_explanation_source": expl_source,
+        "source_grounded": expl_source == "grounded_clinvar",
         "unverified_gene_draft_available": expl_source == "ai_unreviewed",
         "significance_breakdown": g_summary.get("by_significance") or {} if g_summary else {},
         "top_phenotypes": (g_summary.get("phenotypes") or [])[:6] if g_summary else [],
@@ -602,9 +636,9 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         "needs_genetic_counselor": False,
         "matched_topic": "vus_known_gene",
         "suggested_questions": suggested,
-        "llm_used": False,
-        "fallback_used": True,
-        "llm_mode": "none",
+        "llm_used": _llm_used_for_expl,
+        "fallback_used": not _llm_used_for_expl,
+        "llm_mode": "source_grounded" if _llm_used_for_expl else "none",
         "gene_metadata": gene_meta,
     }
 
