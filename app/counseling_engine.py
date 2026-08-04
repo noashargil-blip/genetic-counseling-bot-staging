@@ -486,11 +486,13 @@ def _resolve_gene_explanation_for_vus(
             }
 
     # 5. Generate AI gene biology summary, persist to physician review queue
+    _draft_debug_resolver: dict = {}
     _ai_draft = _generate_unverified_gene_draft(
         gene,
         question=question,
-        clinvar_context=None,
+        clinvar_context=gene_summary,  # use ClinVar summary → biology-focused prompt
         use_lenient_validator=True,   # biology-function prompt, not ClinVar stats
+        _debug=_draft_debug_resolver,
     )
     if _ai_draft and _ai_draft.get("text_he"):
         _persist_rec = _persist_reviewable_ai_expansion(
@@ -507,6 +509,7 @@ def _resolve_gene_explanation_for_vus(
             "review_status": _persist_rec.get("review_status") if _persist_rec else None,
             "approved": False,
             "vus_note_he": None,
+            "draft_debug": _draft_debug_resolver,
         }
 
     # 6. Nothing available (LLM not configured or failed)
@@ -517,7 +520,109 @@ def _resolve_gene_explanation_for_vus(
         "review_status": None,
         "approved": None,
         "vus_note_he": None,
+        "draft_debug": _draft_debug_resolver,
     }
+
+
+# ---------------------------------------------------------------------------
+# Unified gene content resolver (Session 27.9.10)
+# ---------------------------------------------------------------------------
+# Source classes as per the spec:
+#   Class A — trusted: curated | grounded | grounded_clinvar | physician_approved
+#              → display_mode = "main_answer", source_grounded = True
+#   Class B — model expansion: ai_unreviewed
+#              → display_mode = "supplemental_card", requires_physician_review = True
+#   Class C — general low-risk (handled upstream, not in this function)
+#   none      → display_mode = "none"
+#
+# Thin wrapper around _resolve_gene_explanation_for_vus() that enriches the
+# result with display policy fields used by all gene answer builders.
+# Keeps source_type values unchanged so downstream gene_metadata fields
+# (gene_explanation_source, gene_knowledge_status) remain backward compatible.
+
+_SOURCE_A_TYPES: "frozenset[str]" = frozenset({
+    "curated", "grounded", "grounded_clinvar", "physician_approved",
+})
+
+
+def _resolve_gene_content(
+    gene: str,
+    intent: str,
+    question: str,
+    gene_summary: "Optional[dict]" = None,
+) -> dict:
+    """
+    Universal gene content resolver — single source of truth for all gene routes.
+
+    Delegates to _resolve_gene_explanation_for_vus() for the priority chain
+    (curated → gene_knowledge → clinvar_grounded → physician_approved →
+     model_expansion → none) and adds display policy fields.
+
+    Returns a ContentResolution dict:
+      text_he                — the gene explanation text, or None
+      source_type            — curated | grounded | grounded_clinvar |
+                               physician_approved | ai_unreviewed | none
+      source_grounded        — True for Class A sources
+      requires_physician_review — True for model expansion (ai_unreviewed)
+      display_mode           — main_answer | supplemental_card | none
+      review_draft_id        — UUID if a review record was created, else None
+      review_status          — "unreviewed" | "approved" | None
+      approved               — bool or None
+      vus_note_he            — VUS-specific note from gene_knowledge, or None
+      gene_symbol            — gene
+      answer_scope           — the caller's intent (overview/function/conditions/vus)
+    """
+    raw = _resolve_gene_explanation_for_vus(gene, question=question, gene_summary=gene_summary)
+    raw_source = raw["source_type"]
+
+    is_source_a = raw_source in _SOURCE_A_TYPES
+    if raw_source == "ai_unreviewed":
+        display_mode = "supplemental_card"
+    elif is_source_a:
+        display_mode = "main_answer"
+    else:
+        display_mode = "none"
+
+    return {
+        "text_he": raw["text_he"],
+        "source_type": raw_source,
+        "source_grounded": is_source_a,
+        "requires_physician_review": raw_source == "ai_unreviewed",
+        "display_mode": display_mode,
+        "review_draft_id": raw.get("review_draft_id"),
+        "review_status": raw.get("review_status"),
+        "approved": raw.get("approved"),
+        "vus_note_he": raw.get("vus_note_he"),
+        "gene_symbol": gene,
+        "answer_scope": intent,
+        "draft_debug": raw.get("draft_debug"),  # propagate debug info from step 5
+    }
+
+
+# Source-type → tier label used in gene_metadata (backward compat)
+def _source_to_answer_tier(source_type: str, has_summary: bool) -> str:
+    if source_type == "curated":
+        return "tier1"
+    if source_type == "grounded":
+        return "tier1b"
+    if source_type in ("grounded_clinvar", "physician_approved"):
+        return "tier2" if has_summary else "tier1"
+    if source_type == "ai_unreviewed":
+        return "tier2" if has_summary else "tier3"
+    return "tier2" if has_summary else "tier3"
+
+
+# Source-type → gene_knowledge_status string (backward compat)
+def _source_to_knowledge_status(source_type: str, has_summary: bool) -> str:
+    if source_type in ("curated", "grounded"):
+        return "approved"
+    if source_type == "grounded_clinvar":
+        return "grounded"
+    if source_type == "physician_approved":
+        return "physician_approved"
+    if source_type == "ai_unreviewed":
+        return "ai_draft_pending"
+    return "clinvar_index_no_expansion" if has_summary else "missing"
 
 
 def _build_known_gene_answer(gene: str, question: str = "", include_unverified_gene_draft: bool = False) -> dict:
@@ -541,17 +646,16 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
     # ClinVar stats for gene_metadata technical card — never in main answer by default
     g_summary = gene_index.get_gene_summary(gene) if gene_index._GENE_INDEX_AVAILABLE else None  # noqa: F821
 
-    # Universal gene-explanation resolution (priority 1→6)
-    # Pass g_summary so the grounded_clinvar step can use ClinVar phenotypes —
-    # the same evidence used by the standalone gene-biology route.
-    gene_expl = _resolve_gene_explanation_for_vus(gene, question=question, gene_summary=g_summary)
+    # Universal gene-explanation resolution (Session 27.9.10 shared resolver)
+    _intent = _classify_answer_intent(question)
+    gene_expl = _resolve_gene_content(gene, _intent, question=question, gene_summary=g_summary)
     expl_source: str = gene_expl["source_type"]
     expl_text: Optional[str] = gene_expl["text_he"]
     expl_vus_note: Optional[str] = gene_expl.get("vus_note_he")
 
-    # Compose VUS answer
-    if expl_source in ("curated", "grounded", "grounded_clinvar", "physician_approved"):
-        # Concise VUS opening (gene explanation follows in main answer)
+    # Compose VUS answer — use display_mode for routing decision
+    if gene_expl["display_mode"] == "main_answer":
+        # Source A (trusted): gene explanation is merged into the main VUS answer
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
             "VUS הוא ממצא שמשמעותו עדיין לא ידועה — הוא אינו שקול לממצא פתוגני. "
@@ -564,7 +668,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             "חשוב להבדיל בין התפקיד הכללי של הגן לבין המשמעות של ה-VUS הספציפי שנמצא בבדיקה."
         )
     else:
-        # ai_unreviewed or none: fuller VUS paragraph in main answer;
+        # Source B (supplemental_card) or none: fuller VUS paragraph in main answer;
         # gene explanation (if any) appears only in the supplemental AI card.
         opening = (
             f"קבלת תוצאה שמציינת VUS בגן {gene} יכולה להיות מבלבלת. "
@@ -640,10 +744,11 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         "fallback_used": not _llm_used_for_expl,
         "llm_mode": "source_grounded" if _llm_used_for_expl else "none",
         "gene_metadata": gene_meta,
+        "answer_scope": _intent,
     }
 
-    # Attach AI gene explanation to supplemental card (ai_unreviewed path)
-    if expl_source == "ai_unreviewed" and expl_text:
+    # Attach AI gene explanation to supplemental card (source B: model_expansion / ai_unreviewed)
+    if gene_expl["display_mode"] == "supplemental_card" and expl_text:
         result["unverified_gene_draft"] = {
             "visible": True,
             "status": "ai_generated_unreviewed",
@@ -1564,6 +1669,56 @@ def _phrase_curated_function_answer(
     if any(p in text for p in _personal_flags):
         return None
     return text
+
+
+# ---------------------------------------------------------------------------
+# Answer-scope intent signals (Session 27.9.10)
+# Used by _classify_answer_intent() to route within gene-answer builders.
+# ---------------------------------------------------------------------------
+_INTENT_CONDITIONS_SIGNALS: "frozenset[str]" = frozenset([
+    "מחלות", "מחלה", "מצבים", "מצב", "קשור ל", "קשורות ל", "מקושר",
+    "associated", "conditions", "diseases", "disorder", "syndrome",
+    "פגיעה", "תסמונת", "הפרעה", "הפרעות",
+])
+
+_INTENT_SIMPLIFY_SIGNALS: "frozenset[str]" = frozenset([
+    "פשוט", "פשוטה", "פשוטות", "תסביר", "בפשטות", "במילים פשוטות",
+    "בצורה פשוטה", "קל יותר", "יותר פשוט", "simpl", "explain again",
+    "שוב", "בקצרה", "בפשטות",
+])
+
+
+def _classify_answer_intent(question: str, context: "Optional[dict]" = None) -> str:
+    """Classify a question's intent within the gene-answer domain.
+
+    Returns one of: "overview" | "function" | "conditions" | "vus" |
+                    "followup" | "general" | "simplify"
+
+    This is used by gene answer builders (_build_gene_clinvar_answer,
+    _build_known_gene_answer) to tailor content and record last_answer_scope
+    in conversation context.  Routing safety decisions (privacy, high-stakes)
+    are handled upstream in classify_question_intent() and are not repeated here.
+    """
+    lower = question.strip().lower()
+
+    # Simplify / restate
+    if any(sig in lower for sig in _INTENT_SIMPLIFY_SIGNALS):
+        return "simplify"
+
+    # VUS — always route to VUS handling
+    if _mentions_vus(question):
+        return "vus"
+
+    # Function questions — what the gene does / how it works
+    if _is_gene_function_question(question):
+        return "function"
+
+    # Conditions / associations
+    if any(sig in lower for sig in _INTENT_CONDITIONS_SIGNALS):
+        return "conditions"
+
+    # Default: general gene overview
+    return "overview"
 
 
 # ---------------------------------------------------------------------------
@@ -4957,406 +5112,283 @@ def _draft_adds_meaningful_information(draft_text: str, main_answer: str) -> boo
     return overlap < 0.65
 
 
-def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene_draft: bool = False, corrected_from: "Optional[str]" = None) -> Optional[dict]:
+def _build_gene_clinvar_answer(
+    question: str,
+    gene: str,
+    include_unverified_gene_draft: bool = False,
+    corrected_from: "Optional[str]" = None,
+) -> Optional[dict]:
     """
     Build the full /ask response for a gene-level ClinVar question.
 
-    Returns None only when the gene_index is unavailable (caller falls through).
-    When the gene is not found in the index, returns a safe "not found" response.
-    Always uses the deterministic formatter; optionally layers an LLM phrasing pass.
+    Session 27.9.10: uses _resolve_gene_content() as the single source-resolution
+    layer for all tiers.  display_mode controls routing:
+      "main_answer"       — Source A (curated/grounded/grounded_clinvar/physician_approved):
+                            text in main answer, no supplemental card.
+      "supplemental_card" — Source B (ai_unreviewed): safe deterministic fallback in
+                            main answer, AI text in supplemental card only.
+      "none"              — no content available: "no data" message.
+
+    Persistence of AI expansions is handled inside _resolve_gene_explanation_for_vus()
+    (step 5 of the priority chain) — no separate persist call is needed here.
 
     The returned dict includes a ``gene_metadata`` key that the Pydantic response
-    model (`CounselingAskResponse`) serializes conditionally — it appears in the
-    JSON only for gene-level responses, keeping the standard 5-field schema intact
-    for all other answer types.
+    model serializes conditionally.  Returns a dict in all cases (never None in
+    practice — callers guard on gene_index._GENE_INDEX_AVAILABLE before calling).
     """
     summary = gene_index.get_gene_summary(gene)
-    if summary is None:
-        # Gene not found in the local ClinVar index.
-        # Check approved sources in priority order: Tier 1a → Tier 1b → Tier 3.
-        card_summary = gene_cards.get_approved_summary(gene)
-        if card_summary:
-            # Tier 1a (gene_cards card only — no ClinVar stats available).
-            preamble_1a = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
-            det = preamble_1a + card_summary
-            return {
-                "answer": det,
-                "safety_level": "general_information",
-                "needs_genetic_counselor": False,
-                "matched_topic": "gene_clinvar_summary",
-                "suggested_questions": _gene_suggested_questions(question, gene),
-                "llm_used": False,
-                "fallback_used": True,
-                "llm_mode": "none",
-                "gene_metadata": {
-                    "gene_symbol": gene,
-                    "data_source": "Curated educational content",
-                    "llm_used": False,
-                    "fallback_used": True,
-                    "total_variants": None,
-                    "found_in_index": False,
-                    "answer_tier": "tier1",
-                    "gene_knowledge_status": "approved",
-                    "unverified_gene_draft_available": False,
-                },
-            }
-        # Tier 1b: Gene Knowledge Base approved record (no ClinVar stats).
-        gk_patient = gene_knowledge.get_gene_patient_summary(gene)
-        gk_vus = gene_knowledge.get_gene_vus_note(gene)
-        if gk_patient:
-            preamble_1b = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
-            parts_1b = [preamble_1b + gk_patient]
-            if gk_vus and _mentions_vus(question):
-                parts_1b.append(gk_vus)
-            det = "\n\n".join(parts_1b)
-            return {
-                "answer": det,
-                "safety_level": "general_information",
-                "needs_genetic_counselor": False,
-                "matched_topic": "gene_clinvar_summary",
-                "suggested_questions": _gene_suggested_questions(question, gene),
-                "llm_used": False,
-                "fallback_used": True,
-                "llm_mode": "none",
-                "gene_metadata": {
-                    "gene_symbol": gene,
-                    "data_source": "Gene Knowledge Base",
-                    "llm_used": False,
-                    "fallback_used": True,
-                    "total_variants": None,
-                    "found_in_index": False,
-                    "answer_tier": "tier1b",
-                    "gene_knowledge_status": "approved",
-                    "unverified_gene_draft_available": False,
-                },
-            }
-        # Tier 3: gene not in any approved source and not in local ClinVar index.
-        # Attempt AI fallback before returning a "no data" message.
-        _correction_note_t3 = (
-            f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
-            if corrected_from else ""
-        )
-        _t3_resolved = _resolve_gene_explanation_for_vus(gene, question=question, gene_summary=None)
-        _t3_source = _t3_resolved.get("source_type", "none")
-        _t3_text = (_t3_resolved.get("text_he") or "").strip()
-        if _t3_source != "none" and _t3_text:
-            _t3_draft_id = _t3_resolved.get("review_draft_id")
-            _t3_draft: "Optional[dict]" = None
-            if _t3_draft_id:
-                _t3_draft = {
-                    "visible": True,
-                    "gene_symbol": gene,
-                    "text_he": _t3_text,
-                    "review_status": _t3_resolved.get("review_status") or "unreviewed",
-                    "approved": _t3_resolved.get("approved") or False,
-                    "requires_physician_review": _t3_source == "ai_unreviewed",
-                    "source_type": _t3_source,
-                }
-            _t3_result: dict = {
-                "answer": _correction_note_t3 + _t3_text,
-                "safety_level": "general_information",
-                "needs_genetic_counselor": False,
-                "matched_topic": "gene_clinvar_summary",
-                "suggested_questions": _gene_suggested_questions(question, gene),
-                "llm_used": True,
-                "fallback_used": False,
-                "gene_metadata": {
-                    "gene_symbol": gene,
-                    "data_source": "AI-generated (unreviewed)",
-                    "llm_used": True,
-                    "fallback_used": False,
-                    "total_variants": None,
-                    "found_in_index": False,
-                    "answer_tier": "tier3",
-                    "gene_knowledge_status": (
-                        "ai_draft_pending" if _t3_source == "ai_unreviewed" else _t3_source
-                    ),
-                    "unverified_gene_draft_available": True,
-                    "requires_physician_review": _t3_source == "ai_unreviewed",
-                },
-            }
-            if _t3_draft:
-                _t3_result["unverified_gene_draft"] = _t3_draft
-                _t3_result["ai_draft_debug"] = {
-                    "attempted": True,
-                    "generated": True,
-                    "shown": True,
-                    "reason": "gene_explanation_ai_generated",
-                }
-            return _t3_result
+    found_in_index = summary is not None
 
-        # AI fallback also unavailable — final "no data" message.
-        return {
-            "answer": _correction_note_t3 + f"אין עדיין מידע על הגן {gene} במאגר המקומי.",
-            "safety_level": "general_information",
-            "needs_genetic_counselor": False,
-            "matched_topic": "gene_clinvar_summary",
-            "suggested_questions": _gene_suggested_questions(question, gene),
-            "llm_used": False,
-            "fallback_used": True,
-            "gene_metadata": {
-                "gene_symbol": gene,
-                "data_source": "ClinVar (NCBI) via local gene index",
-                "llm_used": False,
-                "fallback_used": True,
-                "total_variants": None,
-                "found_in_index": False,
-                "answer_tier": "tier3",
-                "gene_knowledge_status": "missing",
-                "unverified_gene_draft_available": False,
-            },
-        }
-
-    # Gene IS in the ClinVar index.
-    # Priority order: Tier 1a (gene_cards) → Tier 1b (gene_knowledge) → Tier 2 (ClinVar-only).
-    curated = gene_cards.get_approved_summary(gene)
-    if curated:
-        # Tier 1a: approved gene card — curated patient education.
-        # ClinVar stats go to gene_metadata only (no ClinVar dump in main answer).
-        preamble = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
-        if _is_gene_function_question(question):
-            _expanded = _phrase_curated_function_answer(gene, curated, question)
-            det = preamble + (_expanded if _expanded else curated)
-        else:
-            det = preamble + curated
-        return {
-            "answer": det,
-            "safety_level": "general_information",
-            "needs_genetic_counselor": False,
-            "matched_topic": "gene_clinvar_summary",
-            "suggested_questions": _gene_suggested_questions(question, gene),
-            "llm_used": False,
-            "fallback_used": True,
-            "llm_mode": "none",
-            "gene_metadata": {
-                "gene_symbol": gene,
-                "data_source": "Curated educational content + ClinVar",
-                "llm_used": False,
-                "fallback_used": True,
-                "total_variants": summary.get("total_variants"),
-                "found_in_index": True,
-                "answer_tier": "tier1",
-                "gene_knowledge_status": "approved",
-                "unverified_gene_draft_available": False,
-                "significance_breakdown": summary.get("by_significance") or {},
-                "top_phenotypes": (summary.get("phenotypes") or [])[:6],
-            },
-        }
-
-    # Tier 1b: Gene Knowledge Base approved record + ClinVar stats in metadata.
-    gk_patient_ci = gene_knowledge.get_gene_patient_summary(gene)
-    gk_vus_ci = gene_knowledge.get_gene_vus_note(gene)
-    if gk_patient_ci:
-        preamble_ci = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
-        parts_ci = [preamble_ci + gk_patient_ci]
-        if gk_vus_ci and _mentions_vus(question):
-            parts_ci.append(gk_vus_ci)
-        det_ci = "\n\n".join(parts_ci)
-        return {
-            "answer": det_ci,
-            "safety_level": "general_information",
-            "needs_genetic_counselor": False,
-            "matched_topic": "gene_clinvar_summary",
-            "suggested_questions": _gene_suggested_questions(question, gene),
-            "llm_used": False,
-            "fallback_used": True,
-            "llm_mode": "none",
-            "gene_metadata": {
-                "gene_symbol": gene,
-                "data_source": "Gene Knowledge Base + ClinVar",
-                "llm_used": False,
-                "fallback_used": True,
-                "total_variants": summary.get("total_variants"),
-                "found_in_index": True,
-                "answer_tier": "tier1b",
-                "gene_knowledge_status": "approved",
-                "unverified_gene_draft_available": False,
-                "significance_breakdown": summary.get("by_significance") or {},
-                "top_phenotypes": (summary.get("phenotypes") or [])[:6],
-            },
-        }
-
-    # Tier 2: no approved gene card or knowledge base record, but gene is in ClinVar index.
-    # ClinVar details (significance_breakdown, top_phenotypes) remain in
-    # gene_metadata for the collapsed technical UI card.
-    _correction_prefix_t2 = (
+    _correction_note = (
         f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
         if corrected_from else ""
     )
-    tier2_fallback_answer = (
-        _correction_prefix_t2 +
-        f"עדיין אין לי סיכום ביולוגי זמין לגן {gene}. "
-        f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע."
-    )
-    suggested = _gene_suggested_questions(question, gene)
 
-    # Session 27.8 Part B: check for source-grounded phrasing FIRST.
-    # Grounded phrasing uses only supplied context (ClinVar phenotypes /
-    # approved_context_summary) and does NOT require physician review.
-    # ClinVar variant counts alone are NOT sufficient (Part B invariant).
-    _grounded_debug: dict = {}
-    has_grounded, grounded_ctx = _has_sufficient_grounded_gene_context(gene, summary)
-    grounded_answer: "Optional[str]" = None
-    if has_grounded:
-        grounded_answer = _generate_source_grounded_gene_answer(
-            gene, grounded_ctx, _debug=_grounded_debug
+    _intent = _classify_answer_intent(question)
+    resolved = _resolve_gene_content(gene, _intent, question=question, gene_summary=summary)
+    display_mode = resolved["display_mode"]
+    source_type = resolved["source_type"]
+    source_text = (resolved["text_he"] or "").strip()
+
+    # -----------------------------------------------------------------------
+    # Source A — trusted (curated / grounded / grounded_clinvar / physician_approved)
+    # Text goes directly into the main answer; no supplemental card.
+    # -----------------------------------------------------------------------
+    if display_mode == "main_answer":
+        preamble = (
+            _MUTATION_GENE_PREAMBLE_HE.format(gene=gene)
+            if _is_mutation_specific_question(question) else ""
         )
-
-    # Session 27.8 Part C: gene answer cascade
-    # Tier 2 priority: grounded phrasing → approved physician draft → fallback+unverified.
-    # Only generate unverified draft when grounded phrasing is unavailable (Part I).
-    _draft_debug: dict = {}
-    unverified_draft = None
-    draft_available = False
-    _approved_db_draft = None
-    _draft_promoted = False
-
-    if grounded_answer:
-        # Source-grounded: LLM phrases supplied context; no review queue; no unverified card.
-        main_answer = _correction_prefix_t2 + grounded_answer
-        _answer_source = AI_CONTENT_TYPE_GROUNDED
-    else:
-        # Session 27.7 Part B: look for a physician-approved draft in ALL visibility
-        # modes.  Approved (physician-vetted) content fills the curated-content gap
-        # regardless of whether pending/unreviewed drafts are shown.
-        try:
-            from app import review_db as _rdb
-            _approved_db_draft = _rdb.get_approved_draft(gene, draft_type="gene_summary")
-        except Exception:
-            pass  # degraded silently — show fallback
-
-        if _approved_db_draft:
-            main_answer = _correction_prefix_t2 + _approved_db_draft["effective_text"]
-            _answer_source = "approved"
-            _draft_promoted = True
-            if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
-                draft_available = False
+        # Intent-aware LLM expansion for curated function questions
+        if source_type == "curated" and _is_gene_function_question(question):
+            _expanded = _phrase_curated_function_answer(gene, source_text, question)
+            main_text = preamble + (_expanded if _expanded else source_text)
+            _llm_used = _expanded is not None
         else:
-            # No grounded context, no approved draft: generate unverified expansion.
-            # PENDING drafts NEVER become the main answer (Session 27.6.1 invariant).
-            unverified_draft = _generate_unverified_gene_draft(
-                gene, question, clinvar_context=summary, use_lenient_validator=True,
-                _debug=_draft_debug,
-            )
-            draft_available = unverified_draft is not None
-            if _AI_DRAFT_VISIBILITY_MODE == "approved_only":
-                main_answer = tier2_fallback_answer
-                _answer_source = "fallback"
-                draft_available = False
-            else:
-                main_answer = tier2_fallback_answer
-                _answer_source = "fallback"
+            main_text = preamble + source_text
+            _llm_used = source_type == "grounded_clinvar"
 
-    # Supplemental card visibility — only for unverified expanded drafts.
-    # Grounded answers (main) and approved-promoted answers never show a second card.
-    _draft_text_he = (unverified_draft or {}).get("text_he", "")
-    if grounded_answer or _draft_promoted:
-        draft_displayable = False
+        main_answer = _correction_note + main_text
+
+        _tier_a = {
+            "curated": "tier1",
+            "grounded": "tier1b",
+            "grounded_clinvar": "tier2",
+            "physician_approved": "tier2",
+        }
+        _status_a = {
+            "curated": "approved",
+            "grounded": "approved",
+            "grounded_clinvar": "grounded",
+            "physician_approved": "approved",  # backward compat: "approved" for promoted drafts
+        }
+        _ds_a = {
+            "curated": "Curated educational content" + (" + ClinVar" if found_in_index else ""),
+            "grounded": "Gene Knowledge Base" + (" + ClinVar" if found_in_index else ""),
+            "grounded_clinvar": "ClinVar (NCBI) via local gene index",
+            "physician_approved": "ClinVar (NCBI) via local gene index",
+        }
+
+        gene_meta: dict = {
+            "gene_symbol": gene,
+            "data_source": _ds_a.get(source_type, "ClinVar (NCBI) via local gene index"),
+            "llm_used": _llm_used,
+            "fallback_used": True,
+            "total_variants": summary.get("total_variants") if summary else None,
+            "found_in_index": found_in_index,
+            "answer_tier": _tier_a.get(source_type, "tier2"),
+            "gene_knowledge_status": _status_a.get(source_type, "approved"),
+            "unverified_gene_draft_available": False,
+            "source_grounded": source_type == "grounded_clinvar",  # backward compat
+            "requires_physician_review": False,
+            "ai_draft_attempted": False,
+            "ai_draft_generated": False,
+            "answer_scope": _intent,
+        }
+        if source_type == "grounded_clinvar":
+            gene_meta["ai_content_type"] = AI_CONTENT_TYPE_GROUNDED
+            gene_meta["draft_promoted_to_answer"] = False
+            gene_meta["draft_hidden_reason"] = "grounded_answer_is_main"
+        elif source_type == "physician_approved":
+            gene_meta["draft_promoted_to_answer"] = True
+            gene_meta["draft_hidden_reason"] = "approved_text_is_main_answer"
+            gene_meta["unverified_gene_draft_displayable"] = False
+        if summary:
+            gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
+            gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+
+        result: dict = {
+            "answer": main_answer,
+            "safety_level": "general_information",
+            "needs_genetic_counselor": False,
+            "matched_topic": "gene_clinvar_summary",
+            "suggested_questions": _gene_suggested_questions(question, gene),
+            "llm_used": _llm_used,
+            "fallback_used": True,
+            "llm_mode": "source_grounded" if source_type == "grounded_clinvar" else "none",
+            "gene_metadata": gene_meta,
+            "answer_scope": _intent,
+        }
+        result["ai_draft_debug"] = {
+            "attempted": False,
+            "generated": False,
+            "shown": False,
+            "reason": "curated_or_grounded",
+        }
+        return result
+
+    # -----------------------------------------------------------------------
+    # Source B — model expansion (ai_unreviewed)
+    # Safe deterministic fallback in main; AI text in supplemental card only.
+    # -----------------------------------------------------------------------
+    if display_mode == "supplemental_card":
+        if found_in_index:
+            # Tier 2: gene IS in ClinVar index, no approved biology source
+            main_answer = (
+                _correction_note +
+                f"עדיין אין לי סיכום ביולוגי זמין לגן {gene}. "
+                f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע."
+            )
+            answer_tier = "tier2"
+            _gk_status = "unverified_available"
+        else:
+            # Tier 3: gene NOT in any source
+            main_answer = (
+                _correction_note +
+                f"הגן {gene} אינו מופיע עדיין במאגר המקומי שלנו. "
+                f"ניתן לעיין בהצעות השאלות לצוות הגנטי שלך."
+            )
+            answer_tier = "tier3"
+            _gk_status = "ai_draft_pending"
+
+        _draft_displayable = (
+            bool(source_text)
+            and _draft_adds_meaningful_information(source_text, main_answer)
+            and _AI_DRAFT_VISIBILITY_MODE != "approved_only"
+        )
         _draft_hidden_reason: "Optional[str]" = (
-            "grounded_answer_is_main" if grounded_answer else "approved_text_is_main_answer"
-        )
-    elif _AI_DRAFT_VISIBILITY_MODE == "approved_only":
-        draft_displayable = False
-        _draft_hidden_reason = "approved_only_mode" if draft_available else "no_draft"
-    else:
-        draft_displayable = (
-            draft_available
-            and _draft_adds_meaningful_information(_draft_text_he, main_answer)
-        )
-        _draft_hidden_reason = (
-            None if draft_displayable
-            else "no_draft" if not draft_available
+            None if _draft_displayable
+            else "approved_only_mode" if _AI_DRAFT_VISIBILITY_MODE == "approved_only"
+            else "no_draft" if not source_text
             else "identical_to_main_answer"
         )
 
-    result: dict = {
+        unverified_draft = {
+            "visible": _draft_displayable,
+            "gene_symbol": gene,
+            "text_he": source_text,
+            "review_status": resolved.get("review_status") or "unreviewed",
+            "approved": resolved.get("approved") or False,
+            "requires_physician_review": True,
+            "source_type": source_type,
+        }
+
+        gene_meta = {
+            "gene_symbol": gene,
+            "data_source": "AI-generated (unreviewed)",
+            "llm_used": True,
+            "fallback_used": False,
+            "total_variants": summary.get("total_variants") if summary else None,
+            "found_in_index": found_in_index,
+            "answer_tier": answer_tier,
+            "gene_knowledge_status": _gk_status,
+            "unverified_gene_draft_available": True,
+            "unverified_gene_draft_displayable": _draft_displayable,
+            "draft_hidden_reason": _draft_hidden_reason,
+            "draft_promoted_to_answer": False,
+            "ai_content_type": AI_CONTENT_TYPE_EXPANDED,
+            "source_grounded": False,
+            "requires_physician_review": True,
+            "ai_draft_attempted": True,
+            "ai_draft_generated": True,
+            "answer_scope": _intent,
+        }
+        if summary:
+            gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
+            gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+
+        result = {
+            "answer": main_answer,
+            "safety_level": "general_information",
+            "needs_genetic_counselor": False,
+            "matched_topic": "gene_clinvar_summary",
+            "suggested_questions": _gene_suggested_questions(question, gene),
+            "llm_used": True,
+            "fallback_used": False,
+            "llm_mode": "draft_openai",
+            "gene_metadata": gene_meta,
+            "answer_scope": _intent,
+            "unverified_gene_draft": unverified_draft,
+            "ai_draft_debug": {
+                "attempted": True,
+                "generated": True,
+                "shown": _draft_displayable,
+                "reason": "gene_explanation_ai_generated",
+            },
+        }
+        # Persistence was handled inside _resolve_gene_explanation_for_vus() step 5.
+        # Mirror review_draft_id / review_status from the resolved dict.
+        if resolved.get("review_draft_id"):
+            result["review_draft_id"] = resolved["review_draft_id"]
+            result["review_status"] = resolved.get("review_status")
+            result["unverified_gene_draft"]["review_draft_id"] = resolved["review_draft_id"]
+            result["unverified_gene_draft"]["review_status"] = resolved.get("review_status")
+        return result
+
+    # -----------------------------------------------------------------------
+    # display_mode == "none": no content from any source
+    # -----------------------------------------------------------------------
+    main_answer = (
+        _correction_note +
+        (f"אין עדיין מידע על הגן {gene} במאגר המקומי."
+         if not found_in_index
+         else f"עדיין אין לי סיכום ביולוגי זמין לגן {gene}. "
+              f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע.")
+    )
+    gene_meta = {
+        "gene_symbol": gene,
+        "data_source": "ClinVar (NCBI) via local gene index",
+        "llm_used": False,
+        "fallback_used": True,
+        "total_variants": summary.get("total_variants") if summary else None,
+        "found_in_index": found_in_index,
+        "answer_tier": "tier2" if found_in_index else "tier3",
+        "gene_knowledge_status": "missing",
+        "unverified_gene_draft_available": False,
+        "unverified_gene_draft_displayable": False,
+        "draft_promoted_to_answer": False,
+        "ai_draft_attempted": True,   # step 5 always runs; failed here
+        "ai_draft_generated": False,
+        "ai_content_type": None,
+        "source_grounded": False,
+        "requires_physician_review": False,
+        "answer_scope": _intent,
+    }
+    if summary:
+        gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
+        gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+    _debug_info = resolved.get("draft_debug") or {}
+    _ai_draft_debug = {
+        "attempted": True,
+        "generated": False,
+        "shown": False,
+        "reason": "no_content_found",
+    }
+    _ai_draft_debug.update(_debug_info)
+    _ai_draft_debug["shown"] = False  # never shown in "none" branch
+    return {
         "answer": main_answer,
         "safety_level": "general_information",
         "needs_genetic_counselor": False,
         "matched_topic": "gene_clinvar_summary",
-        "suggested_questions": suggested,
-        "llm_used": grounded_answer is not None or draft_available,
-        "fallback_used": grounded_answer is None and not draft_available,
-        "llm_mode": (
-            "source_grounded" if grounded_answer
-            else "draft_openai" if draft_available
-            else "none"
-        ),
-        "gene_metadata": {
-            "gene_symbol": gene,
-            "data_source": "ClinVar (NCBI) via local gene index",
-            "llm_used": grounded_answer is not None or draft_available,
-            "fallback_used": grounded_answer is None and not draft_available,
-            "total_variants": summary.get("total_variants"),
-            "found_in_index": True,
-            "answer_tier": "tier2",
-            "gene_knowledge_status": (
-                "approved" if _draft_promoted
-                else "grounded" if grounded_answer
-                else "unverified_available" if draft_available
-                else "missing"
-            ),
-            "unverified_gene_draft_available": draft_available,
-            # True only when the draft adds content not already in the main answer.
-            "unverified_gene_draft_displayable": draft_displayable,
-            "draft_hidden_reason": _draft_hidden_reason,
-            # True when a physician-approved draft text is the main answer.
-            "draft_promoted_to_answer": _draft_promoted,
-            # Session 27.8 Part A: AI content type classification.
-            "ai_content_type": (
-                AI_CONTENT_TYPE_GROUNDED if grounded_answer
-                else AI_CONTENT_TYPE_EXPANDED if draft_available
-                else None
-            ),
-            "source_grounded": grounded_answer is not None,
-            "requires_physician_review": draft_available and not grounded_answer,
-            "ai_draft_attempted": _draft_debug.get("attempted", False),
-            "ai_draft_generated": draft_available,
-            "significance_breakdown": summary.get("by_significance") or {},
-            "top_phenotypes": (summary.get("phenotypes") or [])[:6],
-        },
+        "suggested_questions": _gene_suggested_questions(question, gene),
+        "llm_used": False,
+        "fallback_used": True,
+        "llm_mode": "none",
+        "gene_metadata": gene_meta,
+        "answer_scope": _intent,
+        "ai_draft_debug": _ai_draft_debug,
     }
-    if draft_available:
-        # Include unverified_gene_draft for API consumers and tests, but the
-        # frontend card is suppressed via draft_promoted_to_answer=True.
-        result["unverified_gene_draft"] = unverified_draft
-        result["ai_draft_debug"] = {
-            "attempted": True,
-            "generated": True,
-            "shown": True,
-            "provider": _draft_debug.get("provider", "unknown"),
-        }
-    else:
-        result["ai_draft_debug"] = _draft_debug or {
-            "attempted": False,
-            "generated": False,
-            "shown": False,
-            "reason": "llm_not_configured_or_unknown",
-        }
-        result["ai_draft_debug"].setdefault("shown", False)
-
-    # Auto-enqueue to physician review DB for AI_EXPANDED_UNVERIFIED only.
-    # SOURCE_GROUNDED_PHRASING must NOT populate the physician review queue (Part I).
-    if draft_available and unverified_draft and not grounded_answer:
-        _gene_clinvar_persist_record = _persist_reviewable_ai_expansion(
-            unverified_draft,
-            draft_type="gene_summary",
-            normalized_intent="gene_biology_expansion",
-            gene_symbol=gene,
-            model_provider=_draft_debug.get("provider"),
-            prompt_version="s26",  # session when gene biology prompt was introduced
-            source_metadata={
-                "ai_content_type": "medical_educational_ai_expansion",
-                "source_basis": "model_expansion_with_clinvar_gene_context",
-                "source_grounded": False,
-                "requires_physician_review": True,
-                "answer_tier": "tier2",
-                "total_variants": summary.get("total_variants"),
-            },
-        )
-        _attach_review_metadata(result, _gene_clinvar_persist_record)
-
-    return result
 
 
 def _build_gene_education_fallback(gene: str) -> dict:
@@ -6280,6 +6312,11 @@ def _build_session_context_out(
     gene_sym = gene_meta.get("gene_symbol")
     if gene_sym and re.match(r"^[A-Za-z0-9]{1,20}$", gene_sym):
         ctx_out["gene_symbol"] = gene_sym.upper()
+
+    # last_answer_scope — intent label from the most recent gene answer.
+    _scope = result.get("answer_scope") or gene_meta.get("answer_scope")
+    if _scope and isinstance(_scope, str) and len(_scope) <= 30:
+        ctx_out["last_answer_scope"] = _scope
 
     return ctx_out
 

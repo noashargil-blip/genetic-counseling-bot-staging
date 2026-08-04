@@ -575,15 +575,17 @@ class TestVusGeneAnswerIncludesGeneNote:
         assert result["safety_level"] == "general_information"
         meta = result.get("gene_metadata", {})
         if meta.get("answer_tier") == "tier2":
-            # Tier-2: patient-friendly note present; raw ClinVar dump absent
-            assert "לגבי הגן CFTR:" in result["answer"], (
-                "Tier-2 VUS+gene answer should include patient-friendly gene note"
-            )
+            if meta.get("gene_knowledge_status") == "grounded":
+                # grounded_clinvar path (Source A): gene note is present
+                assert "לגבי הגן CFTR:" in result["answer"], (
+                    "Tier-2 grounded VUS+gene answer should include patient-friendly gene note"
+                )
+            # Raw ClinVar dump must never appear
             assert "נתוני ClinVar" not in result["answer"], (
                 "Raw ClinVar header must not appear in Tier-2 VUS+gene answer"
             )
         else:
-            # Tier-3 or Tier-1: no gene note; no raw ClinVar dump either
+            # Tier-3 or Tier-1: no raw ClinVar dump either
             assert "נתוני ClinVar עבור גן CFTR" not in result["answer"]
 
     def test_vus_apc_answer_no_personal_recommendations(self):

@@ -194,10 +194,15 @@ class TestDraftWithMockedLLM:
         data = client.post("/ask", json={"question": "CFTR"}).json()
         meta = data.get("gene_metadata", {})
         if meta.get("answer_tier") == "tier2":
-            assert "unverified_gene_draft" in data, (
-                f"Expected draft in response when LLM returns safe text. meta={meta}"
-            )
-            assert data["gene_metadata"]["unverified_gene_draft_available"] is True
+            if meta.get("gene_knowledge_status") == "grounded":
+                # Session 27.9.10: grounded_clinvar (Source A) — no supplemental AI card
+                assert "unverified_gene_draft" not in data
+                assert meta.get("source_grounded") is True
+            else:
+                assert "unverified_gene_draft" in data, (
+                    f"Expected draft in response when LLM returns safe text. meta={meta}"
+                )
+                assert data["gene_metadata"]["unverified_gene_draft_available"] is True
 
     def test_cftr_draft_has_text_he(self, monkeypatch):
         mock_client = MagicMock()
