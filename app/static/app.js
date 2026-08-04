@@ -607,12 +607,22 @@ async function loadUnverifiedDraft(msgId) {
 
 function buildUnverifiedDraftCard(msg) {
   const meta = msg.geneMetadata;
-  // Guard: only show when backend confirmed a draft was generated AND it adds
-  // content beyond the main answer.  unverified_gene_draft_displayable===false
-  // means the backend decided the draft would duplicate the main bubble.
-  // Absent field (older backend) is treated as displayable for compatibility.
-  if (!meta || meta.answer_tier !== 'tier2' || !meta.unverified_gene_draft_available) return null;
-  if (meta.unverified_gene_draft_displayable === false) return null;
+  const draft = msg.unverifiedDraft;
+
+  // Primary gate: a pre-populated visible draft always renders — no tier-gate.
+  // The server sets draft.visible=true and includes non-empty text_he only when
+  // the content is safe to show (passed all validators, not approved_only mode).
+  const draftReady = draft && draft.visible === true && (draft.text_he || '').trim().length > 0;
+
+  // Secondary gate (for the "load-on-demand" button case only):
+  // When the server did NOT pre-populate a draft, check meta flags before
+  // showing a button that would trigger a second /ask round-trip.
+  if (!draftReady) {
+    if (!meta || !meta.unverified_gene_draft_available) return null;
+    // unverified_gene_draft_displayable===false means the draft was generated
+    // but is identical to the main answer; suppress the card to avoid duplication.
+    if (meta.unverified_gene_draft_displayable === false) return null;
+  }
 
   const card = document.createElement('div');
   card.className = 'unverified-draft-card';

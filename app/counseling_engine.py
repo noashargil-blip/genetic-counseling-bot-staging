@@ -62,6 +62,24 @@ _AI_DRAFT_VISIBILITY_MODE = os.environ.get(
 ).strip().lower()
 
 # ---------------------------------------------------------------------------
+# Startup: log safe AI configuration (no secrets, no API keys)
+# ---------------------------------------------------------------------------
+def _log_ai_config() -> None:
+    _provider = os.environ.get("LLM_PROVIDER", "(auto-detect)").strip() or "(auto-detect)"
+    _openai_set = bool(os.environ.get("OPENAI_API_KEY", "").strip())
+    _anthropic_set = bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    _local_url_set = bool(os.environ.get("LOCAL_LLM_URL", "").strip())
+    _model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
+    logger.info(
+        "AI config at startup: provider=%s openai_key=%s anthropic_key=%s "
+        "local_url=%s openai_model=%s visibility_mode=%s",
+        _provider, _openai_set, _anthropic_set,
+        _local_url_set, _model, _AI_DRAFT_VISIBILITY_MODE,
+    )
+
+_log_ai_config()
+
+# ---------------------------------------------------------------------------
 # Gene-name + VUS handling (general education only — never a personal
 # interpretation; this only fires for gene-name mentions WITHOUT a specific
 # variant identifier — see _build_variant_evidence_answer below for the
@@ -425,9 +443,13 @@ def _resolve_gene_explanation_for_vus(
         "vus_note_he":     Optional[str],  # gene_knowledge VUS addendum (grounded only)
       }
     """
+    _g = gene.upper()  # log label — no PII, just gene symbol
+    logger.info("gene_resolver[%s]: start in_index=%s", _g, gene_summary is not None)
+
     # 1. Curated gene card (pre-approved, zero review overhead)
     curated = gene_cards.get_approved_summary(gene)
     if curated:
+        logger.info("gene_resolver[%s]: step1=curated", _g)
         return {
             "text_he": curated,
             "source_type": "curated",
@@ -440,6 +462,7 @@ def _resolve_gene_explanation_for_vus(
     # 2. Gene Knowledge Base (sourced, approved)
     gk_summary = gene_knowledge.get_gene_patient_summary(gene)
     if gk_summary:
+        logger.info("gene_resolver[%s]: step2=grounded", _g)
         return {
             "text_he": gk_summary,
             "source_type": "grounded",
@@ -455,9 +478,11 @@ def _resolve_gene_explanation_for_vus(
     #    context to produce a short LLM-phrased patient-facing summary.
     #    No physician review required (AI_CONTENT_TYPE_GROUNDED classification).
     _has_grounded, _grounded_ctx = _has_sufficient_grounded_gene_context(gene, gene_summary)
+    logger.info("gene_resolver[%s]: step3_grounded_clinvar=%s", _g, _has_grounded)
     if _has_grounded:
         _grounded_text = _generate_source_grounded_gene_answer(gene, _grounded_ctx)
         if _grounded_text:
+            logger.info("gene_resolver[%s]: step3=grounded_clinvar", _g)
             return {
                 "text_he": _grounded_text,
                 "source_type": "grounded_clinvar",
@@ -471,11 +496,13 @@ def _resolve_gene_explanation_for_vus(
     try:
         from app import review_db as _rdb_vus
         _approved_rec = _rdb_vus.get_approved_draft(gene, "gene_summary")
-    except Exception:
+    except Exception as _exc4:
+        logger.debug("gene_resolver[%s]: step4 get_approved_draft failed: %s", _g, type(_exc4).__name__)
         _approved_rec = None
     if _approved_rec:
         _effective = (_approved_rec.get("effective_text") or "").strip()
         if _effective:
+            logger.info("gene_resolver[%s]: step4=physician_approved", _g)
             return {
                 "text_he": _effective,
                 "source_type": "physician_approved",
@@ -486,6 +513,7 @@ def _resolve_gene_explanation_for_vus(
             }
 
     # 5. Generate AI gene biology summary, persist to physician review queue
+    logger.info("gene_resolver[%s]: step5_generating_ai_draft", _g)
     _draft_debug_resolver: dict = {}
     _ai_draft = _generate_unverified_gene_draft(
         gene,
@@ -495,6 +523,8 @@ def _resolve_gene_explanation_for_vus(
         _debug=_draft_debug_resolver,
     )
     if _ai_draft and _ai_draft.get("text_he"):
+        _text_len = len(_ai_draft["text_he"])
+        logger.info("gene_resolver[%s]: step5=ai_draft_generated text_len=%d", _g, _text_len)
         _persist_rec = _persist_reviewable_ai_expansion(
             _ai_draft,
             draft_type="gene_summary",
@@ -502,15 +532,23 @@ def _resolve_gene_explanation_for_vus(
             gene_symbol=gene,
             prompt_version="s2796",
         )
+        _draft_id = _persist_rec.get("id") if _persist_rec else None
+        logger.info("gene_resolver[%s]: step5_persist_id=%s", _g, _draft_id)
         return {
             "text_he": _ai_draft["text_he"],
             "source_type": "ai_unreviewed",
-            "review_draft_id": _persist_rec.get("id") if _persist_rec else None,
+            "review_draft_id": _draft_id,
             "review_status": _persist_rec.get("review_status") if _persist_rec else None,
             "approved": False,
             "vus_note_he": None,
             "draft_debug": _draft_debug_resolver,
         }
+    else:
+        _reason = _draft_debug_resolver.get("reason") or "unknown"
+        logger.warning(
+            "gene_resolver[%s]: step5=ai_draft_FAILED reason=%s attempted=%s",
+            _g, _reason, _draft_debug_resolver.get("attempted"),
+        )
 
     # 6. Nothing available (LLM not configured or failed)
     return {
@@ -5281,6 +5319,13 @@ def _build_gene_clinvar_answer(
             else "approved_only_mode" if _AI_DRAFT_VISIBILITY_MODE == "approved_only"
             else "no_draft" if not source_text
             else "identical_to_main_answer"
+        )
+        logger.info(
+            "gene_clinvar_answer[%s]: supplemental_card tier=%s displayable=%s "
+            "source_text_len=%d hidden_reason=%s visibility_mode=%s",
+            gene, answer_tier, _draft_displayable,
+            len(source_text) if source_text else 0,
+            _draft_hidden_reason, _AI_DRAFT_VISIBILITY_MODE,
         )
 
         unverified_draft = {
