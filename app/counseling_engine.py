@@ -749,30 +749,37 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
 
     # Attach AI gene explanation to supplemental card (source B: model_expansion / ai_unreviewed)
     if gene_expl["display_mode"] == "supplemental_card" and expl_text:
+        _rs = gene_expl.get("review_status") or "unreviewed"
         result["unverified_gene_draft"] = {
             "visible": True,
             "status": "ai_generated_unreviewed",
             "gene_symbol": gene,
             "text_he": expl_text,
-            "review_status": gene_expl.get("review_status"),
+            "review_status": _rs,
             "approved": False,
             "requires_physician_review": True,
             "ai_content_type": "medical_educational_ai_expansion",
             "based_on": "model_expansion_llm_knowledge",
         }
         result["review_draft_id"] = gene_expl.get("review_draft_id")
-        result["review_status"] = gene_expl.get("review_status")
+        result["review_status"] = _rs
         gene_meta["ai_draft_attempted"] = True
         gene_meta["ai_draft_generated"] = True
+        gene_meta["requires_physician_review"] = True
+        gene_meta["unverified_gene_draft_displayable"] = True
+        gene_meta["draft_promoted_to_answer"] = False
         result["ai_draft_debug"] = {
             "attempted": True,
             "generated": True,
-            "shown": False,
+            "shown": True,
             "reason": "gene_explanation_ai_generated",
         }
     else:
         gene_meta["ai_draft_attempted"] = False
         gene_meta["ai_draft_generated"] = False
+        gene_meta["requires_physician_review"] = False
+        gene_meta["unverified_gene_draft_displayable"] = False
+        gene_meta["draft_promoted_to_answer"] = False
 
     # Explicit ClinVar database query: append cleaned statistical note
     if g_summary and _is_explicit_clinvar_db_query(question):
@@ -5199,6 +5206,8 @@ def _build_gene_clinvar_answer(
             "answer_tier": _tier_a.get(source_type, "tier2"),
             "gene_knowledge_status": _status_a.get(source_type, "approved"),
             "unverified_gene_draft_available": False,
+            "unverified_gene_draft_displayable": False,
+            "draft_promoted_to_answer": False,
             "source_grounded": source_type == "grounded_clinvar",  # backward compat
             "requires_physician_review": False,
             "ai_draft_attempted": False,
@@ -5207,12 +5216,10 @@ def _build_gene_clinvar_answer(
         }
         if source_type == "grounded_clinvar":
             gene_meta["ai_content_type"] = AI_CONTENT_TYPE_GROUNDED
-            gene_meta["draft_promoted_to_answer"] = False
             gene_meta["draft_hidden_reason"] = "grounded_answer_is_main"
         elif source_type == "physician_approved":
             gene_meta["draft_promoted_to_answer"] = True
             gene_meta["draft_hidden_reason"] = "approved_text_is_main_answer"
-            gene_meta["unverified_gene_draft_displayable"] = False
         if summary:
             gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
             gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
@@ -5345,6 +5352,17 @@ def _build_gene_clinvar_answer(
          else f"עדיין אין לי סיכום ביולוגי זמין לגן {gene}. "
               f"ניתן לראות פרטים טכניים ממאגר ClinVar בכרטיס המידע.")
     )
+    # Compute debug info first so gene_meta.ai_draft_attempted reflects reality.
+    _debug_info = resolved.get("draft_debug") or {}
+    _ai_draft_debug = {
+        "attempted": False,
+        "generated": False,
+        "shown": False,
+        "reason": "no_content_found",
+    }
+    _ai_draft_debug.update(_debug_info)
+    _ai_draft_debug["shown"] = False  # never shown in "none" branch
+
     gene_meta = {
         "gene_symbol": gene,
         "data_source": "ClinVar (NCBI) via local gene index",
@@ -5357,7 +5375,7 @@ def _build_gene_clinvar_answer(
         "unverified_gene_draft_available": False,
         "unverified_gene_draft_displayable": False,
         "draft_promoted_to_answer": False,
-        "ai_draft_attempted": True,   # step 5 always runs; failed here
+        "ai_draft_attempted": bool(_debug_info.get("attempted", False)),
         "ai_draft_generated": False,
         "ai_content_type": None,
         "source_grounded": False,
@@ -5367,15 +5385,6 @@ def _build_gene_clinvar_answer(
     if summary:
         gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
         gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
-    _debug_info = resolved.get("draft_debug") or {}
-    _ai_draft_debug = {
-        "attempted": True,
-        "generated": False,
-        "shown": False,
-        "reason": "no_content_found",
-    }
-    _ai_draft_debug.update(_debug_info)
-    _ai_draft_debug["shown"] = False  # never shown in "none" branch
     return {
         "answer": main_answer,
         "safety_level": "general_information",
@@ -5465,6 +5474,23 @@ _FOLLOWUP_PHRASES = [
     "ומה עוד",
     "יש עוד",
     "מה נוסף",
+    # Pronoun-possessive gene follow-up phrases (e.g. "ומה התפקיד שלו?").
+    # These have possessive "שלו/שלה" or pronoun "הוא/היא" referring to the
+    # previously mentioned gene. classify_question_intent() disables gene_followup
+    # intent (last_gene_symbol=None), so these must be in _FOLLOWUP_PHRASES to
+    # reach step 5 which resolves the gene from conversation context.
+    "מה התפקיד שלו",
+    "מה התפקיד שלה",
+    "תפקיד שלו",
+    "תפקיד שלה",
+    "מה תפקידו",
+    "מה תפקידה",
+    "הוא קשור",
+    "היא קשורה",
+    "לאיזה מחלות הוא",
+    "לאיזה מצבים הוא",
+    "לאיזה מחלות היא",
+    "לאיזה מצבים היא",
     # English
     "can you elaborate", "tell me more", "what do you mean", "give me an example",
     "i don't understand", "i didn't understand",
