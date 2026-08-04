@@ -1141,6 +1141,32 @@ _GENE_EDUCATION_DRAFT_RETRY_SYSTEM_PROMPT = (
     "  - Output ONLY the sentences."
 )
 
+# System prompt for expanding curated gene answers when user asks a function question.
+# Used only in Tier 1a path; LLM unavailability falls back to raw curated text.
+_FUNCTION_PHRASING_SYSTEM_PROMPT = (
+    "You are a genetic counseling assistant writing an educational explanation about "
+    "a gene for a patient who just had genetic counseling in Israel.\n\n"
+    "TASK: The user asked a function/role question about a gene. "
+    "Expand the supplied approved summary into a fuller, more explanatory Hebrew answer "
+    "that helps the patient understand what the gene does.\n\n"
+    "REQUIREMENTS:\n"
+    "  - Use the supplied curated text as the authoritative source — do not contradict it.\n"
+    "  - Write 4-6 sentences that explain the gene's biological role in accessible Hebrew.\n"
+    "  - You may add general biological context (protein role, cellular process).\n\n"
+    "PROHIBITED:\n"
+    "  - 'יש לך', 'אצלך', 'הסיכון שלך', 'הממצא שלך', 'התוצאה שלך'\n"
+    "  - Personal risk estimates or predictions\n"
+    "  - Treatment, surgery, or screening recommendations\n"
+    "  - 'גורם ל...' — use 'קשור ל' or 'עשוי להשפיע' instead\n"
+    "  - ClinVar statistics or variant counts\n"
+    "  - Referral phrases like 'פנה לצוות הגנטי'\n"
+    "  - Question marks or emoji\n\n"
+    "FORMAT:\n"
+    "  - Hebrew ONLY for main text. Gene symbols and medical terms in English.\n"
+    "  - 4-6 sentences. Maximum 650 characters.\n"
+    "  - Output ONLY the sentences. No preamble, no labels, no quotes."
+)
+
 # Source note appended to every ClinVar-context draft.
 # Patient-friendly wording — does not mention "ClinVar" by name.
 _UNVERIFIED_DRAFT_SOURCE_NOTE_HE = (
@@ -1480,6 +1506,64 @@ def _is_mutation_specific_question(text: str) -> bool:
     """Return True when the user asks 'what is THE mutation of gene X' (singular)."""
     lower = text.strip().lower()
     return any(phrase in lower for phrase in _MUTATION_SPECIFIC_PHRASES)
+
+
+_GENE_FUNCTION_QUESTION_SIGNALS: "frozenset[str]" = frozenset([
+    "פועל",        # "works/functions" — "איך הגן פועל"
+    "תפקיד",       # "role" — "מה תפקיד הגן"
+    "עושה הגן",    # "what does the gene do"
+    "עושה ה",      # broader "what does the ... do"
+    "מה הגן עושה",
+    "role of",
+    "how does",
+    "what does",
+])
+
+
+def _is_gene_function_question(text: str) -> bool:
+    """Return True when the user asks how a gene works or what its biological role is."""
+    lower = text.strip().lower()
+    return any(sig in lower for sig in _GENE_FUNCTION_QUESTION_SIGNALS)
+
+
+def _phrase_curated_function_answer(
+    gene: str,
+    curated_text: str,
+    question: str,
+) -> "Optional[str]":
+    """Expand a curated gene summary into a fuller function answer using LLM.
+
+    Returns the expanded Hebrew text, or None if LLM is unavailable or the output
+    fails validation.  The caller falls back to raw curated_text on None.
+    Never raises.
+    """
+    try:
+        client = create_llm_client()
+    except ValueError:
+        return None
+
+    user_content = (
+        f"Gene: {gene}\n"
+        f"Approved summary: {curated_text}\n"
+        f"Patient question: {question}\n\n"
+        f"Task: Write a fuller 4-6 sentence Hebrew explanation of {gene}'s biological role "
+        f"based strictly on the approved summary above."
+    )
+
+    try:
+        raw = client.call_text_raw(user_content, system_prompt=_FUNCTION_PHRASING_SYSTEM_PROMPT)
+        text = (raw or "").strip()
+    except Exception:
+        return None
+
+    if not text or len(text) < 30:
+        return None
+    if len(text) > 700:
+        return None
+    _personal_flags = ["הסיכון שלך", "אצלך", "יש לך", "הממצא שלך", "התוצאה שלך"]
+    if any(p in text for p in _personal_flags):
+        return None
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -4947,10 +5031,61 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
                 },
             }
         # Tier 3: gene not in any approved source and not in local ClinVar index.
+        # Attempt AI fallback before returning a "no data" message.
         _correction_note_t3 = (
             f"ייתכן שהתכוונת לגן {gene} (מתיקון אוטומטי של '{corrected_from}').\n\n"
             if corrected_from else ""
         )
+        _t3_resolved = _resolve_gene_explanation_for_vus(gene, question=question, gene_summary=None)
+        _t3_source = _t3_resolved.get("source_type", "none")
+        _t3_text = (_t3_resolved.get("text_he") or "").strip()
+        if _t3_source != "none" and _t3_text:
+            _t3_draft_id = _t3_resolved.get("review_draft_id")
+            _t3_draft: "Optional[dict]" = None
+            if _t3_draft_id:
+                _t3_draft = {
+                    "visible": True,
+                    "gene_symbol": gene,
+                    "text_he": _t3_text,
+                    "review_status": _t3_resolved.get("review_status") or "unreviewed",
+                    "approved": _t3_resolved.get("approved") or False,
+                    "requires_physician_review": _t3_source == "ai_unreviewed",
+                    "source_type": _t3_source,
+                }
+            _t3_result: dict = {
+                "answer": _correction_note_t3 + _t3_text,
+                "safety_level": "general_information",
+                "needs_genetic_counselor": False,
+                "matched_topic": "gene_clinvar_summary",
+                "suggested_questions": _gene_suggested_questions(question, gene),
+                "llm_used": True,
+                "fallback_used": False,
+                "gene_metadata": {
+                    "gene_symbol": gene,
+                    "data_source": "AI-generated (unreviewed)",
+                    "llm_used": True,
+                    "fallback_used": False,
+                    "total_variants": None,
+                    "found_in_index": False,
+                    "answer_tier": "tier3",
+                    "gene_knowledge_status": (
+                        "ai_draft_pending" if _t3_source == "ai_unreviewed" else _t3_source
+                    ),
+                    "unverified_gene_draft_available": True,
+                    "requires_physician_review": _t3_source == "ai_unreviewed",
+                },
+            }
+            if _t3_draft:
+                _t3_result["unverified_gene_draft"] = _t3_draft
+                _t3_result["ai_draft_debug"] = {
+                    "attempted": True,
+                    "generated": True,
+                    "shown": True,
+                    "reason": "gene_explanation_ai_generated",
+                }
+            return _t3_result
+
+        # AI fallback also unavailable — final "no data" message.
         return {
             "answer": _correction_note_t3 + f"אין עדיין מידע על הגן {gene} במאגר המקומי.",
             "safety_level": "general_information",
@@ -4979,7 +5114,11 @@ def _build_gene_clinvar_answer(question: str, gene: str, include_unverified_gene
         # Tier 1a: approved gene card — curated patient education.
         # ClinVar stats go to gene_metadata only (no ClinVar dump in main answer).
         preamble = _MUTATION_GENE_PREAMBLE_HE.format(gene=gene) if _is_mutation_specific_question(question) else ""
-        det = preamble + curated
+        if _is_gene_function_question(question):
+            _expanded = _phrase_curated_function_answer(gene, curated, question)
+            det = preamble + (_expanded if _expanded else curated)
+        else:
+            det = preamble + curated
         return {
             "answer": det,
             "safety_level": "general_information",
