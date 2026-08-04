@@ -763,6 +763,8 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         }
         result["review_draft_id"] = gene_expl.get("review_draft_id")
         result["review_status"] = _rs
+        if gene_expl.get("review_draft_id"):
+            result["unverified_gene_draft"]["review_draft_id"] = gene_expl["review_draft_id"]
         gene_meta["ai_draft_attempted"] = True
         gene_meta["ai_draft_generated"] = True
         gene_meta["requires_physician_review"] = True
@@ -4545,8 +4547,9 @@ def _generate_unverified_gene_draft(
                         return det
                 return None
 
+        _raw_model = getattr(client, "_model", None)
         model_name = (
-            getattr(client, "_model", None)
+            (_raw_model if isinstance(_raw_model, str) else None)
             or os.environ.get("LOCAL_LLM_MODEL", None)
             or provider_name
         )
@@ -5288,6 +5291,7 @@ def _build_gene_clinvar_answer(
             "approved": resolved.get("approved") or False,
             "requires_physician_review": True,
             "source_type": source_type,
+            "ai_content_type": "medical_educational_ai_expansion",
         }
 
         gene_meta = {
@@ -5334,10 +5338,11 @@ def _build_gene_clinvar_answer(
             },
         }
         # Persistence was handled inside _resolve_gene_explanation_for_vus() step 5.
-        # Mirror review_draft_id / review_status from the resolved dict.
+        # Always add review_draft_id / review_status keys (None if persistence failed)
+        # so the frontend can read them unconditionally from the response object.
+        result["review_draft_id"] = resolved.get("review_draft_id")
+        result["review_status"] = resolved.get("review_status") or "unreviewed"
         if resolved.get("review_draft_id"):
-            result["review_draft_id"] = resolved["review_draft_id"]
-            result["review_status"] = resolved.get("review_status")
             result["unverified_gene_draft"]["review_draft_id"] = resolved["review_draft_id"]
             result["unverified_gene_draft"]["review_status"] = resolved.get("review_status")
         return result
@@ -6128,6 +6133,20 @@ def _answer_question_impl(
     if not topic and _is_followup_question(text):
         followup_topic, followup_gene = _resolve_followup_context(safe_context, last_topic)
         if followup_topic:
+            # Gene-function follow-up (e.g. "ומה התפקיד שלו?") after a gene/VUS topic:
+            # route through _build_gene_clinvar_answer() so the source policy applies
+            # identically to a first-turn gene question — curated/grounded text → main
+            # answer; AI-generated biology → supplemental card + physician review queue.
+            # Only fires for "function" intent to avoid catching VUS-practical follow-ups
+            # ("מה כדאי לעשות?", "מה ההשלכות?") which stay in _build_followup_answer().
+            if (followup_gene
+                    and followup_topic in ("vus_known_gene", "gene_clinvar_summary")
+                    and _classify_answer_intent(text) == "function"):
+                _gene_fol = _build_gene_clinvar_answer(
+                    text, followup_gene, include_unverified_gene_draft=True
+                )
+                if _gene_fol is not None:
+                    return _gene_fol
             result = _build_followup_answer(followup_topic, followup_gene)
             if result is not None:
                 return result
