@@ -244,6 +244,37 @@ def _mentions_vus(text: str) -> bool:
     return bool(_VUS_TOKEN_RE.search(text)) or "וריאנט לא ידוע" in text or "משמעות לא ידועה" in text
 
 
+# Session 27.11 Part A: prenatal and deletion detection helpers.
+_DELETION_SIGNALS = frozenset(["חסר", "מחיקה", "deletion", "del "])
+_PRENATAL_SIGNALS = frozenset([
+    "הריון", "עובר", "עוברי", "עוברית", "פרנטל", "prenatal", "microarray פרנטלי",
+])
+
+
+def _mentions_deletion(text: str) -> bool:
+    lower = text.lower()
+    return any(w in lower for w in _DELETION_SIGNALS)
+
+
+def _mentions_prenatal(text: str) -> bool:
+    lower = text.lower()
+    return any(w in lower for w in _PRENATAL_SIGNALS)
+
+
+def _detect_subject(text: str) -> str:
+    """Infer the subject of a genetic finding from question text."""
+    lower = text.lower()
+    if any(w in lower for w in ("לעובר", "של העובר", "עוברי", "עוברית", "פרנטל")):
+        return "fetus"
+    if any(w in lower for w in ("לילד", "הילד", "הילדה", "שלי ילד", "שלנו ילד")):
+        return "child"
+    if any(w in lower for w in ("אחי", "אחותי", "הורה", "אמי", "אבי", "אחיי")):
+        return "family_member"
+    if any(w in lower for w in ("לי ", "אני ", "שלי", "עבורי")):
+        return "self"
+    return "unknown"
+
+
 def _detect_known_gene(text: str) -> Optional[str]:
     """Return the canonical gene symbol (e.g. 'BRCA1') if mentioned, typo-tolerant."""
     for canonical, pattern in _GENE_PATTERNS:
@@ -2609,6 +2640,8 @@ _SAFE_CONTEXT_ALLOWED_ACTIVE_TOPICS: frozenset = frozenset({
     "gene_clinvar_summary", "gene_info",
     # VUS variants
     "vus", "vus_known_gene", "vus_general",
+    # Session 27.11: prenatal VUS + deletion combined topic
+    "prenatal_vus_deletion",
     # Carrier status
     "carrier", "carrier_vs_affected", "carrier_general",
     # Inheritance patterns
@@ -6251,6 +6284,415 @@ def classify_question_intent(
 
 
 # ---------------------------------------------------------------------------
+# Session 27.11: Contextual follow-up routing (Parts B–H)
+# ---------------------------------------------------------------------------
+
+# Part D: Prenatal VUS + deletion deterministic educational answer.
+def _build_prenatal_deletion_vus_answer(gene: str, question: str) -> dict:
+    """
+    Educational answer for a prenatal microarray finding: deletion containing a gene,
+    classified as VUS. Deterministic, no LLM, no personal diagnosis.
+    """
+    gene_disp = gene.upper() if gene else "הגן"
+    lines = [
+        f"**ממצא פרנטלי: חסר (deletion) הכולל את {gene_disp} — VUS**",
+        "",
+        "**מהו VUS בהקשר זה?**",
+        "VUS (Variant of Uncertain Significance) הוא ממצא שאין עדיין מספיק ראיות "
+        "מדעיות לסווגו כגורם מחלה (pathogenic) או כבלתי משמעותי (benign). "
+        "הסיווג עשוי להשתנות ככל שמצטברות ראיות.",
+        "",
+        "**חסר כרומוזומלי לעומת שינוי נקודתי**",
+        "חסר (deletion) פרנטלי פירושו שקטע מהכרומוזום, הכולל את הגן, חסר לחלוטין — "
+        "שונה משינוי בסיס בודד (SNV). הצוות הגנטי בוחן את גודל החסר, "
+        "הגנים הכלולים בו, ואם הוא ירוש מאחד ההורים (inherited) או de novo.",
+        "",
+        "**VUS בהקשר פרנטלי**",
+        "ממצא VUS בעובר אינו אבחנה ואינו מוכיח שתהיה בעיה — אך גם לא שולל זאת. "
+        "הצוות הגנטי יבחן את הממצא בהקשר הקליני ויעקוב אחר מחקרים חדשים.",
+        "",
+        "**שאלות שכדאי לשאול את הצוות הגנטי**",
+        "• מה גודל החסר, ואיזה גנים כלולים בו?",
+        "• האם בוצע ניתוח הפרדה להורים (segregation analysis)?",
+        "• האם הממצא מופיע בבסיסי נתונים של ממצאים שפירים (DGV, DECIPHER)?",
+        f"• האם קיים מידע ספציפי על חסרים הכוללים את {gene_disp}?",
+        "• כיצד תדעו אם הסיווג ישתנה בעתיד?",
+    ]
+    answer = "\n".join(lines)
+    _clarification = _build_clarification_guidance("chromosome_deletion_general")
+    if _clarification:
+        answer = answer + "\n\n" + _clarification
+    return {
+        "answer": answer,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": True,
+        "matched_topic": "prenatal_vus_deletion",
+        "suggested_questions": [
+            "מה גודל החסר בדיוק?",
+            "האם בוצע ניתוח הפרדה להורים?",
+            "מה הסיכוי שהסיווג ישתנה?",
+        ],
+        "llm_used": False,
+        "fallback_used": False,
+        "gene_metadata": {
+            "gene_symbol": gene_disp,
+            "answer_scope": "prenatal_deletion_vus",
+            "gene_knowledge_status": "prenatal_deletion",
+        },
+    }
+
+
+# Part B: Follow-up intent patterns for context-aware routing.
+_FOLLOWUP_INTENTS_V2: dict = {
+    "simplify_previous": [
+        "לא הבנתי",
+        "תסביר פשוט",
+        "במילים פשוטות",
+        "יכול להסביר",
+        "תוכל להסביר",
+        "תוכלי להסביר",
+        "בפשטות",
+        "הסבר פשוט",
+        "בצורה פשוטה",
+        "תסבירי פשוט",
+        "תסביר לי את הממצא",
+        "תסביר לי שוב",
+        "תוכל לפשט",
+        "פשט לי",
+    ],
+    "personal_meaning": [
+        "מה זה אומר עבורי",
+        "מה זה אומר לי",
+        "מה זה אומר לנו",
+        "מה אומר לי",
+        "מה אומר עבורי",
+        "מה אומר לנו",
+        "מה המשמעות עבורי",
+        "מה המשמעות לי",
+        "עבור ההריון",
+        "מה זה אומר לעובר",
+        "מה זה אומר להריון",
+        "מה זה אומר למשפחה שלי",
+        "מה זה אומר במקרה שלי",
+    ],
+    "concern_about_disease_association": [
+        "אבל כתבת ש",
+        "אבל אמרת ש",
+        "כתבת שהגן קשור",
+        "כתבת שהגן",
+        "הגן קשור למחלה",
+        "קשור למחלה",
+        "מסוכן לעובר",
+        "זה מסוכן",
+        "זה לא מסוכן",
+        "אז יש לו מחלה",
+        "אז יש לנו בעיה",
+        "אז יש לי מחלה",
+        "אז העובר חולה",
+    ],
+    "safe_next_steps": [
+        "מה כדאי לשאול",
+        "שאלות לצוות",
+        "מה לשאול את",
+        "מה לשאול",
+        "הצעד הבא",
+        "מה הצעדים",
+        "מה עושים עכשיו",
+        "מה הצעדים הבאים",
+        "מה להמשיך",
+        "כיצד להמשיך",
+        "מה מקובל לעשות",
+    ],
+    "clarify_uncertainty": [
+        "למה לא ידועה",
+        "למה לא יודעים",
+        "מתי ידעו",
+        "מתי יהיה ברור",
+        "כמה זמן עוד",
+        "מתי תהיה תשובה",
+        "אפשר לדעת יותר",
+        "מה עוד אפשר לבדוק",
+    ],
+}
+
+
+def _classify_followup_intent_v2(
+    text: str,
+    session_context: Optional[dict],
+) -> Optional[str]:
+    """
+    Classify a question as a contextual follow-up intent.
+    Returns an intent name or None if not a recognized contextual follow-up.
+    Only fires when session_context.active_topic is set (active medical context).
+    """
+    if not session_context or not session_context.get("active_topic"):
+        return None
+    lower = text.strip().lower()
+    for intent_name, patterns in _FOLLOWUP_INTENTS_V2.items():
+        if any(p in lower for p in patterns):
+            return intent_name
+    return None
+
+
+# Part F: Simplified re-statement of the previous answer (no new facts).
+def _build_simplify_answer(session_context: dict) -> dict:
+    active_topic = session_context.get("active_topic", "")
+    gene = (session_context.get("gene_symbol") or "").upper() or None
+    is_prenatal = bool(session_context.get("pregnancy_context"))
+    finding_type = session_context.get("finding_type", "")
+    gene_disp = f"הגן {gene}" if gene else "הגן"
+
+    if "vus" in active_topic or active_topic == "prenatal_vus_deletion":
+        if (finding_type in ("deletion", "chromosome_deletion_general")
+                or active_topic == "prenatal_vus_deletion") and is_prenatal:
+            summary = (
+                f"בקיצור: נמצא בבדיקת microarray שיש לעובר חסר (deletion) הכולל את {gene_disp}. "
+                "החסר סווג כ-VUS — כלומר המשמעות הקלינית שלו עדיין לא ברורה. "
+                "VUS אינו אבחנה של מחלה, אך גם לא ממצא שפיר מוכח; הצוות ימשיך לעקוב."
+            )
+        elif gene:
+            summary = (
+                f"בקיצור: נמצא שינוי ב{gene_disp} שסווג כ-VUS (וריאנט עם משמעות לא ידועה). "
+                "VUS אינו אבחנה — אין הוכחה שהוא גורם מחלה, אך גם אין הוכחה שהוא בלתי משמעותי. "
+                "הסיווג עשוי להשתנות ככל שמצטברות ראיות."
+            )
+        else:
+            summary = (
+                "בקיצור: VUS הוא ממצא גנטי שמשמעותו הרפואית עדיין לא ברורה — "
+                "לא הוכח כגורם מחלה ולא הוכח כבלתי משמעותי. "
+                "הצוות הגנטי עוקב אחריו ויעדכן אם הסיווג ישתנה."
+            )
+    elif "carrier" in active_topic:
+        summary = (
+            "בקיצור: נשאות פירושה שיש לך עותק אחד של וריאנט בגן. "
+            "נשאים בדרך כלל בריאים, אך עלולים להעביר את הוריאנט לילדיהם. "
+            "הצוות הגנטי יכול להסביר את ההשלכות על התכנון המשפחתי."
+        )
+    else:
+        summary = (
+            "הממצא הגנטי שנדון קודם טעון בחינה נוספת על ידי הצוות הגנטי, "
+            "שיפרש אותו בהתאם לתמונה הקלינית המלאה ולהיסטוריה המשפחתית שלך."
+        )
+
+    return {
+        "answer": summary,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": True,
+        "matched_topic": active_topic or "vus",
+        "suggested_questions": ["האם יש מידע נוסף שיכול לעזור לסווג את הממצא?"],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# Part G: Safe personal-meaning boundary answer.
+def _build_personal_meaning_answer(session_context: dict) -> dict:
+    is_prenatal = bool(session_context.get("pregnancy_context"))
+    gene = (session_context.get("gene_symbol") or "").upper() or None
+    gene_disp = f"הגן {gene}" if gene else "הגן"
+
+    if is_prenatal:
+        answer = (
+            "אני יכול להסביר מושגים גנטיים כלליים, אך לא יכול לפרש ממצא ספציפי עבורך ועבור ההריון. "
+            "הפירוש של ממצא פרנטלי תלוי בפרטים רבים: גודל החסר, הגנים הכלולים בו, "
+            "האם הממצא ירוש או de novo, ממצאי האולטרסאונד, ועוד. "
+            "הצוות הגנטי שמטפל בך הוא הגורם המוסמך לפרש את המשמעות הספציפית עבורך."
+        )
+    else:
+        answer = (
+            "אני יכול להסביר מושגים גנטיים כלליים, אך לא יכול לפרש מה הממצא אומר עבורך ספציפית. "
+            "הפירוש האישי תלוי בהיסטוריה הרפואית שלך, בממצאים הקליניים, ובהקשר המשפחתי שלך — "
+            "מידע שרק הצוות הגנטי המטפל בך מחזיק."
+        )
+        if gene:
+            answer += (
+                f"\n\nלגבי {gene_disp} ספציפית — הצוות יכול לבחון את המידע העדכני ביותר "
+                "ולאור המצב הקליני שלך לתת פירוש מותאם."
+            )
+
+    return {
+        "answer": answer,
+        "safety_level": "requires_genetic_counselor",
+        "needs_genetic_counselor": True,
+        "matched_topic": session_context.get("active_topic"),
+        "suggested_questions": [
+            "מה ההשלכות הספציפיות של הממצא בהקשר שלי?",
+            "כיצד הממצא משפיע על תוכניות ההריון/הטיפול?",
+        ],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# Part E: Disease-association concern — gene association ≠ variant pathogenicity.
+def _build_disease_concern_answer(text: str, session_context: dict) -> dict:
+    gene = (session_context.get("gene_symbol") or "").upper() or None
+    is_prenatal = bool(session_context.get("pregnancy_context"))
+    active_topic = session_context.get("active_topic", "")
+    gene_disp = f"הגן {gene}" if gene else "הגן"
+
+    lines = [
+        "**קשר בין גן למחלה לעומת סיווג הוריאנט הספציפי**",
+        "",
+        f"חשוב להבחין בין שני מושגים:",
+        "",
+        f"**1. קשר {gene_disp} למחלה** — המידע מתייחס לגן כולו. ידוע שוריאנטים *מסוימים* "
+        "בגן יכולים לגרום לתסמינים, אך לא כל שינוי בגן הוא פתוגני.",
+        "",
+        "**2. הסיווג של הממצא הספציפי** — הממצא סווג כ-VUS, כלומר אין עדיין מספיק ראיות "
+        "לסווגו כגורם מחלה (pathogenic) או כבלתי משמעותי (benign). VUS ≠ אבחנה.",
+        "",
+    ]
+
+    if is_prenatal:
+        lines += [
+            "**בהקשר פרנטלי**: VUS בעובר אינו אבחנה ואינו מוכיח שהעובר יסבול מהמצב. "
+            "הצוות הגנטי יבחן את הממצא בהקשר הכולל: גודל החסר, ממצאי האולטרסאונד, "
+            "והאם הממצא ירוש מאחד ההורים.",
+            "",
+        ]
+
+    lines += [
+        "**לסיכום**: קשר הגן למחלה בספרות הוא מידע רלוונטי, אך אינו מספיק לקבוע "
+        "שהממצא הספציפי שלך מסוכן. כל וריאנט מוערך בנפרד על בסיס ראיותיו הספציפיות.",
+        "",
+        "**שאלות לצוות הגנטי**",
+        f"• האם ידועים וריאנטים דומים ב{gene_disp} שסווגו כפתוגניים?",
+        "• מה הראיות הספציפיות לממצא זה?",
+        "• מה ההסתברות שהסיווג ישתנה?",
+    ]
+
+    return {
+        "answer": "\n".join(lines),
+        "safety_level": "general_information",
+        "needs_genetic_counselor": True,
+        "matched_topic": active_topic or "vus_known_gene",
+        "suggested_questions": [
+            f"מה ידוע על וריאנטים ספציפיים ב{gene_disp}?",
+            "כיצד VUS מוסב לפתוגני?",
+            "מה ההשלכות אם הסיווג ישתנה?",
+        ],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# Part H: Safe next steps — team-oriented question list.
+def _build_safe_next_steps_answer(session_context: dict) -> dict:
+    is_prenatal = bool(session_context.get("pregnancy_context"))
+    gene = (session_context.get("gene_symbol") or "").upper() or None
+    active_topic = session_context.get("active_topic", "")
+    gene_disp = f"הגן {gene}" if gene else "הגן"
+
+    if is_prenatal:
+        questions = [
+            "מה גודל החסר בדיוק, ואילו גנים נוספים כלולים בו?",
+            "האם בוצע ניתוח הפרדה להורים (segregation analysis)?",
+            "האם ממצאי האולטרסאונד מראים שינויים נוספים?",
+            "מה מצב הממצא בבסיסי נתונים כמו DECIPHER ו-DGV?",
+            "כיצד תדעו אם הסיווג ישתנה, ומה עושים במקרה כזה?",
+        ]
+        if gene:
+            questions.append(f"מה ידוע ספציפית על חסרים הכוללים את {gene_disp}?")
+    elif "vus" in active_topic:
+        questions = [
+            "מה הראיות הספציפיות לסיווג הנוכחי של הממצא?",
+            "האם מומלץ לבצע בדיקה גנטית לבני משפחה?",
+            "מתי יש לחזור לבדיקת מעקב?",
+            "האם קיים פרוטוקול להתעדכן כשהסיווג ישתנה?",
+            "האם ישנם מחקרים קליניים רלוונטיים לממצא זה?",
+        ]
+    else:
+        questions = [
+            "מה הצעד הקליני הבא המומלץ?",
+            "מה ההשלכות על בני משפחה?",
+            "האם יש צורך בבדיקות גנטיות נוספות?",
+            "מתי כדאי לתאם פגישת מעקב עם הצוות?",
+        ]
+
+    formatted = "\n".join(f"• {q}" for q in questions)
+    answer = (
+        "**שאלות מומלצות לצוות הגנטי**\n\n"
+        "אחת הדרכים הטובות ביותר להתקדם היא לשאול את הצוות הגנטי שאלות ספציפיות:\n\n"
+        f"{formatted}"
+    )
+
+    return {
+        "answer": answer,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": True,
+        "matched_topic": active_topic or "vus",
+        "suggested_questions": questions[:3],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# Clarify the nature of uncertainty in the classification.
+def _build_clarify_uncertainty_answer(session_context: dict) -> dict:
+    answer = (
+        "**מדוע VUS נשאר לא מסווג?**\n\n"
+        "סיווג כ-VUS משמעו שהעדויות הקיימות — ממחקרים קליניים, מאוכלוסיות, "
+        "ומנסויים מעבדתיים — אינן מספיקות לקביעה ברורה.\n\n"
+        "**מה יכול לשנות זאת?**\n"
+        "• צבירת מקרים נוספים של אנשים עם אותו וריאנט\n"
+        "• תוצאות ניסויים פונקציונליים (functional assays)\n"
+        "• נתוני segregation מבני משפחה\n"
+        "• נתוני שכיחות מאוכלוסיות רחבות\n\n"
+        "**כמה זמן לוקח?** אין לוח זמנים קבוע. חלק מה-VUS'ים מסווגים מחדש תוך שנים, "
+        "אחרים נשארים VUS לאורך זמן רב יותר.\n\n"
+        "הצוות הגנטי יכול לדווח לך על התקדמות בסיווג — שאל כיצד להתעדכן."
+    )
+    return {
+        "answer": answer,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": True,
+        "matched_topic": session_context.get("active_topic"),
+        "suggested_questions": [
+            "כיצד אפשר לדעת אם הסיווג השתנה?",
+            "האם בדיקות נוספות יכולות לסייע בסיווג?",
+        ],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# Part I: Answer plan validation (pre-return check).
+def _validate_answer_plan(answer: str, plan: dict) -> bool:
+    """Verify the answer satisfies must_address and must_not_include constraints."""
+    for term in plan.get("must_address", []):
+        if term not in answer:
+            return False
+    for term in plan.get("must_not_include", []):
+        if term in answer:
+            return False
+    return True
+
+
+# Part C dispatcher: route a classified follow-up intent to its handler.
+def _build_contextual_followup_answer(
+    followup_intent: str,
+    text: str,
+    session_context: dict,
+) -> Optional[dict]:
+    """
+    Dispatch a contextual follow-up intent to the correct handler.
+    Returns None to fall through to the normal pipeline.
+    """
+    if followup_intent == "simplify_previous":
+        return _build_simplify_answer(session_context)
+    if followup_intent == "personal_meaning":
+        return _build_personal_meaning_answer(session_context)
+    if followup_intent == "concern_about_disease_association":
+        return _build_disease_concern_answer(text, session_context)
+    if followup_intent == "safe_next_steps":
+        return _build_safe_next_steps_answer(session_context)
+    if followup_intent == "clarify_uncertainty":
+        return _build_clarify_uncertainty_answer(session_context)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -6330,6 +6772,32 @@ def _answer_question_impl(
             "fallback_used": False,
         }
 
+    # 1.5. Contextual follow-up resolution (Session 27.11 Part C).
+    # Fires when session_context carries an active medical-genetic topic and
+    # the question is a recognized context-dependent follow-up.
+    # Placed BEFORE intent-based routing (B.3+) so that follow-ups like
+    # "זה מסוכן?" receive an educational answer instead of the generic
+    # personal_high_stakes refusal at step D.
+    # Guard: skips when the user names a DIFFERENT gene (explicit topic switch).
+    if session_context and session_context.get("active_topic"):
+        _ctx_fui = _classify_followup_intent_v2(text, session_context)
+        if _ctx_fui:
+            _ctx_gene_in_text = _detect_known_gene(text)
+            if not _ctx_gene_in_text and gene_index._GENE_INDEX_AVAILABLE:
+                _ctx_gene_in_text = _extract_gene_symbol_from_question(text)
+            _ctx_gene_current = (session_context.get("gene_symbol") or "").strip().upper() or None
+            _is_explicit_gene_switch = (
+                _ctx_gene_in_text
+                and _ctx_gene_current
+                and _ctx_gene_in_text.upper() != _ctx_gene_current
+            )
+            if not _is_explicit_gene_switch:
+                _ctx_fui_result = _build_contextual_followup_answer(
+                    _ctx_fui, text, session_context
+                )
+                if _ctx_fui_result is not None:
+                    return _ctx_fui_result
+
     # B.3. Extra sex chromosome educational answer.
     if intent == "extra_chromosome_education":
         return _build_extra_chromosome_answer()
@@ -6379,6 +6847,9 @@ def _answer_question_impl(
             if _mentions_vus(text):
                 if _is_vus_options_request(text):
                     return _build_vus_options_answer(_edu_gene)
+                # Part D (27.11): prenatal + deletion context → specialized answer.
+                if _mentions_deletion(text) and _mentions_prenatal(text):
+                    return _build_prenatal_deletion_vus_answer(_edu_gene, text)
                 return _build_known_gene_answer(
                     _edu_gene, question=text, include_unverified_gene_draft=True)
             if gene_index._GENE_INDEX_AVAILABLE:
@@ -6420,6 +6891,14 @@ def _answer_question_impl(
         # VUS + explicit gene + options request → practical options answer
         if intent == "explicit_gene_question" and _mentions_vus(text) and _is_vus_options_request(text):
             return _build_vus_options_answer(gene_for_routing)
+
+        # Part D (27.11): VUS + gene + deletion + prenatal → specialized prenatal answer.
+        # Must fire before the standard VUS gene answer so the deletion/prenatal context is kept.
+        if (intent == "explicit_gene_question"
+                and _mentions_vus(text)
+                and _mentions_deletion(text)
+                and _mentions_prenatal(text)):
+            return _build_prenatal_deletion_vus_answer(gene_for_routing, text)
 
         # VUS + explicit gene → enriched VUS answer
         if intent == "explicit_gene_question" and _mentions_vus(text):
@@ -6704,11 +7183,29 @@ def _build_session_context_out(
         if prev_finding and prev_finding in _CHROMOSOME_TOPIC_INTENTS:
             ctx_out["finding_type"] = prev_finding
 
+    # Session 27.11 (Part A): finding_type for prenatal VUS + deletion context.
+    # Overrides the chromosome-only logic above when the question explicitly
+    # mentions a deletion alongside VUS in a prenatal context.
+    if matched in ("prenatal_vus_deletion", "vus_known_gene", "vus"):
+        if _mentions_deletion(question) and _mentions_prenatal(question):
+            ctx_out["finding_type"] = "deletion"
+        elif session_context and session_context.get("finding_type") == "deletion":
+            # Carry deletion finding_type forward when topic stays VUS-related.
+            ctx_out["finding_type"] = "deletion"
+
     # Gene symbol from gene metadata — alphanumeric only.
     gene_meta = result.get("gene_metadata") or {}
     gene_sym = gene_meta.get("gene_symbol")
     if gene_sym and re.match(r"^[A-Za-z0-9]{1,20}$", gene_sym):
         ctx_out["gene_symbol"] = gene_sym.upper()
+    elif session_context and matched in (
+        "prenatal_vus_deletion", "vus_known_gene", "gene_clinvar_summary",
+        "carrier", "carrier_vs_affected",
+    ):
+        # Carry gene_symbol forward for follow-up turns that produce no new gene_metadata.
+        _prev_gene = session_context.get("gene_symbol")
+        if _prev_gene and re.match(r"^[A-Za-z0-9]{1,20}$", _prev_gene):
+            ctx_out["gene_symbol"] = _prev_gene.upper()
 
     # last_answer_scope — intent label from the most recent gene answer.
     _scope = result.get("answer_scope") or gene_meta.get("answer_scope")
@@ -6720,12 +7217,14 @@ def _build_session_context_out(
     _unresolved_type: "Optional[str]" = None
     if matched in ("vus", "vus_known_gene", "vus_general"):
         _unresolved_type = "vus"
+    elif matched == "prenatal_vus_deletion":
+        _unresolved_type = "prenatal_vus_deletion"
     elif matched in _CHROMOSOME_TOPIC_INTENTS:
         _unresolved_type = "chromosome_finding"
     elif matched == "specific_variant":
         _unresolved_type = "variant"
-    elif matched == "clinvar_interpretation":
-        # Carry forward the prior unresolved type when answering a meta-question
+    elif matched in ("clinvar_interpretation",) or matched is None:
+        # Carry forward the prior unresolved type when answering a meta/follow-up question.
         _unresolved_type = (session_context or {}).get("unresolved_question_type")
     if _unresolved_type:
         ctx_out["unresolved_question_type"] = _unresolved_type
@@ -6734,12 +7233,48 @@ def _build_session_context_out(
     # (e.g. "vus", "pathogenic", "benign") for drift-control on follow-up turns.
     # Only set from gene_metadata when a gene answer was produced.
     _gk_status = gene_meta.get("gene_knowledge_status")
-    if matched in ("vus", "vus_known_gene") and _gk_status:
+    _VUS_TOPICS = ("vus", "vus_known_gene", "prenatal_vus_deletion")
+    if matched in _VUS_TOPICS:
         ctx_out["variant_classification"] = "vus"
     elif session_context and "variant_classification" in session_context and matched in (
-        "vus_known_gene", "gene_clinvar_summary", "clinvar_interpretation"
+        "vus_known_gene", "gene_clinvar_summary", "clinvar_interpretation",
+        "prenatal_vus_deletion",
     ):
         ctx_out["variant_classification"] = session_context["variant_classification"]
+    elif session_context and matched is None:
+        # Follow-up turns (matched=None) — carry classification forward.
+        _prev_vc = session_context.get("variant_classification")
+        if _prev_vc:
+            ctx_out["variant_classification"] = _prev_vc
+
+    # Session 27.11 (Part A): pregnancy_context and subject — detect from question
+    # or carry forward when topic remains in the same medical context.
+    _GENETIC_CARRY_TOPICS = (
+        "vus", "vus_known_gene", "vus_general", "prenatal_vus_deletion",
+        "gene_clinvar_summary", "gene_info", "clinvar_interpretation",
+        "chromosome_deletion_general", "chromosome_finding_general",
+        "mosaicism_general",
+    )
+    if _mentions_prenatal(question):
+        ctx_out["pregnancy_context"] = True
+        _subj = _detect_subject(question)
+        if _subj and _subj != "unknown":
+            ctx_out["subject"] = _subj
+    elif session_context and matched in _GENETIC_CARRY_TOPICS:
+        _prev_preg = session_context.get("pregnancy_context")
+        if _prev_preg is not None:
+            ctx_out["pregnancy_context"] = _prev_preg
+        _prev_subj = session_context.get("subject")
+        if _prev_subj:
+            ctx_out["subject"] = _prev_subj
+    elif session_context and matched is None:
+        # Follow-up turns — always carry pregnancy/subject context.
+        _prev_preg = session_context.get("pregnancy_context")
+        if _prev_preg is not None:
+            ctx_out["pregnancy_context"] = _prev_preg
+        _prev_subj = session_context.get("subject")
+        if _prev_subj:
+            ctx_out["subject"] = _prev_subj
 
     return ctx_out
 

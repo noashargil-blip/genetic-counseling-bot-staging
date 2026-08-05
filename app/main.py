@@ -313,6 +313,71 @@ class SafeSessionContext(BaseModel):
             return s.upper()
         return None
 
+    # Session 27.11 Part A: additional structured context fields.
+
+    pregnancy_context: Optional[bool] = Field(
+        None,
+        description="Whether the finding is in a prenatal/pregnancy context",
+    )
+    subject: Optional[str] = Field(
+        None, max_length=20,
+        description="Subject of the finding: self | fetus | child | family_member | unknown",
+    )
+    variant_classification: Optional[str] = Field(
+        None, max_length=30,
+        description="Finding classification: vus | pathogenic | likely_pathogenic | benign | likely_benign | conflicting | unknown",
+    )
+    unresolved_question_type: Optional[str] = Field(
+        None, max_length=40,
+        description="Type of unresolved finding from the previous turn",
+    )
+    last_answer_scope: Optional[str] = Field(
+        None, max_length=40,
+        description="Scope label from the previous answer",
+    )
+    last_response_source: Optional[str] = Field(
+        None, max_length=30,
+        description="Source class: curated | grounded | physician_approved | ai_unreviewed | no_info",
+    )
+
+    @field_validator("subject", mode="before")
+    @classmethod
+    def _validate_subject(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        _ALLOWED = {"self", "fetus", "child", "family_member", "unknown"}
+        return s if s in _ALLOWED else None
+
+    @field_validator("variant_classification", mode="before")
+    @classmethod
+    def _validate_variant_classification(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        _ALLOWED = {"vus", "pathogenic", "likely_pathogenic", "benign",
+                    "likely_benign", "conflicting", "unknown"}
+        return s if s in _ALLOWED else None
+
+    @field_validator("unresolved_question_type", mode="before")
+    @classmethod
+    def _validate_unresolved_question_type(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        _ALLOWED = {"vus", "chromosome_finding", "variant", "prenatal_deletion",
+                    "prenatal_duplication", "prenatal_vus_deletion"}
+        return s if s in _ALLOWED else None
+
+    @field_validator("last_response_source", mode="before")
+    @classmethod
+    def _validate_last_response_source(cls, v: object) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        _ALLOWED = {"curated", "grounded", "physician_approved", "ai_unreviewed", "no_info"}
+        return s if s in _ALLOWED else None
+
 
 class CounselingAskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000, description="User question, in Hebrew")
