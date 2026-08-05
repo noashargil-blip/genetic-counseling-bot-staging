@@ -513,10 +513,25 @@ def _build_clinvar_patient_interpretation(gene: str, summary: "Optional[dict]") 
     lines = [header, ""]
 
     if not summary:
-        lines.append(
-            "נתוני ClinVar מתארים את כלל הוריאנטים שדווחו עבור הגן — "
-            "לא את הממצא הספציפי שלך."
-        )
+        # No gene-specific statistics available — provide a general explanation
+        # that still covers the most common patient concerns: pathogenic counts,
+        # conflicting classifications, and the personal-interpretation boundary.
+        lines += [
+            "נתוני ClinVar מתארים את כלל הוריאנטים השונים שדווחו עבור הגן — "
+            "לא את הממצא הספציפי שלך.",
+            "",
+            "העובדה שקיימות רשומות pathogenic בגן אינה אומרת שהוריאנט שלך הוא "
+            "pathogenic — כל וריאנט מסווג בנפרד על סמך ראיות ספציפיות לו.",
+            "",
+            "סיווגים מתנגשים (conflicting) פירושם שמעבדות שונות פירשו וריאנטים "
+            "מסוימים באופן שונה — דבר שכיח בגנטיקה קלינית ולא בהכרח נוגע "
+            "לוריאנט שלך.",
+            "",
+            "כדי להבין את הממצא האישי שלך יש לפנות לצוות הגנטי.",
+            "",
+            "נתוני ClinVar מתעדכנים ככל שמצטברות ראיות חדשות — הסיווג עשוי "
+            "להשתנות בעתיד.",
+        ]
         return "\n".join(lines)
 
     total = summary.get("total_variants") or 0
@@ -2948,6 +2963,13 @@ def _build_chromosome_education_answer(
                 "intended_use": "supplemental_medical_expansion",
             },
         )
+
+    # Part B (27.10): proactive clarification guidance for unresolved findings.
+    # Appended AFTER the main KB answer so the team-oriented checklist appears
+    # at the end of the patient-facing response without replacing any content.
+    _chr_clarification = _build_clarification_guidance(sub_intent)
+    if _chr_clarification:
+        main_answer = main_answer + "\n\n" + _chr_clarification
 
     result: dict = {
         "answer": main_answer,
@@ -5763,6 +5785,12 @@ _FOLLOWUP_PHRASES = [
     "ומה עוד",
     "יש עוד",
     "מה נוסף",
+    # Clarification-guidance follow-up — "what can help understand/clarify X?"
+    # These phrases align with the guidance header and must stay in the VUS/gene
+    # topic context rather than routing to a generic KB fallback.
+    "מה יכול לעזור להבין",
+    "מה יכול לעזור לצוות",
+    "מה יכול לעזור",
     # Pronoun-possessive gene follow-up phrases (e.g. "ומה התפקיד שלו?").
     # These have possessive "שלו/שלה" or pronoun "הוא/היא" referring to the
     # previously mentioned gene. classify_question_intent() disables gene_followup
@@ -6415,6 +6443,25 @@ def _answer_question_impl(
             if known:
                 return _build_gene_education_fallback(known)
 
+    # E.5. Ambiguous gene mention for "unclear" intent queries.
+    # Handles phrases like "ומה לגבי BRCA1?" where the ו- prefix makes the
+    # intent classifier return "unclear" even though a gene name is present.
+    # Only fires for questions that contain a gene name; pure follow-up phrases
+    # without a gene name never reach this (gene_for_unclear is None).
+    if intent == "unclear" and not topic:
+        _gene_for_unclear = _detect_known_gene(text)
+        if not _gene_for_unclear and gene_index._GENE_INDEX_AVAILABLE:
+            _gene_for_unclear = _extract_gene_symbol_from_question(text)
+        if _gene_for_unclear:
+            if gene_index._GENE_INDEX_AVAILABLE:
+                _unclear_gene_result = _build_gene_clinvar_answer(
+                    text, _gene_for_unclear, include_unverified_gene_draft=True
+                )
+                if _unclear_gene_result is not None:
+                    return _unclear_gene_result
+            else:
+                return _build_gene_education_fallback(_gene_for_unclear)
+
     # 4.5. Chromosome follow-up routing (Session 27.8 Part F).
     # Fires when session_context.active_topic is a chromosome education sub-intent
     # and the message contains a finding-type keyword (e.g. 'מחיקה', 'duplication').
@@ -6431,6 +6478,12 @@ def _answer_question_impl(
     #    last_topic / sanitized conversation context, not KB keyword scoring.
     if not topic and _is_followup_question(text):
         followup_topic, followup_gene = _resolve_followup_context(safe_context, last_topic)
+        # Part D (27.10): when conversation history carries no gene name, fall back
+        # to session_context.gene_symbol so pronoun/clarification follow-ups like
+        # "מה יכול לעזור להבין אם הוא משמעותי?" retain the prior gene context even
+        # without a full conversation_context list.
+        if followup_gene is None and _ctx_gene_for_routing:
+            followup_gene = _ctx_gene_for_routing
         if followup_topic:
             # Gene-function follow-up (e.g. "ומה התפקיד שלו?") after a gene/VUS topic:
             # route through _build_gene_clinvar_answer() so the source policy applies
