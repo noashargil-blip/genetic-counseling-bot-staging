@@ -45,6 +45,7 @@ ClinVar retriever, or used to resolve follow-up context.
 import logging
 import os
 import re
+import time as _time
 import traceback as _traceback
 from typing import NamedTuple, Optional
 
@@ -164,7 +165,79 @@ def _compose_vus_practical_answer(gene: Optional[str]) -> str:
         "• האם הממצא אומר שיש לי מחלה, או שמשמעותו עדיין לא ידועה?"
     )
 
-    return "\n\n".join([p1, p2, questions])
+    # Part B (27.10): append bounded clarification guidance.
+    clarification = _build_clarification_guidance("vus")
+    parts_list = [p1, p2, questions]
+    if clarification:
+        parts_list.append(clarification)
+    return "\n\n".join(parts_list)
+
+
+# ---------------------------------------------------------------------------
+# Part B (27.10) — Proactive clarification guidance for unresolved findings
+# ---------------------------------------------------------------------------
+
+# Each item: (key, Hebrew sentence used in the guidance list).
+# Selection is deterministic based on topic and finding type.
+_CLARIFICATION_ALLOWLIST: list = [
+    ("verify_report",
+     "לוודא את הנוסח והסיווג המדויק של הממצא בדוח המעבדה."),
+    ("check_reclassification",
+     "לבדוק עם המעבדה אם הסיווג עודכן מאז הדוח."),
+    ("compare_clinical",
+     "להשוות את הממצא לתמונה הקלינית ולתסמינים."),
+    ("family_history",
+     "לסקור את ההיסטוריה המשפחתית הרלוונטית."),
+    ("segregation_testing",
+     "לשקול האם בדיקות של בני משפחה עשויות להוסיף מידע, לפי שיקול הצוות הגנטי."),
+    ("additional_databases",
+     "לבחון מקורות מדעיים ומאגרי מידע נוספים."),
+    ("phenotype_fit",
+     "לשקול האם הערכה קלינית נוספת יכולה לסייע בקביעת ההתאמה הפנוטיפית."),
+    ("prepare_questions",
+     "להכין שאלות ממוקדות לפגישה עם הצוות הגנטי."),
+]
+
+# Topic → ordered list of item keys (2-4 items selected deterministically)
+_CLARIFICATION_TOPIC_ITEMS: dict = {
+    "vus": ["verify_report", "check_reclassification", "compare_clinical", "prepare_questions"],
+    "vus_known_gene": ["verify_report", "check_reclassification", "compare_clinical", "prepare_questions"],
+    "chromosome_finding_general": ["verify_report", "compare_clinical", "family_history", "prepare_questions"],
+    "chromosome_deletion_general": ["verify_report", "compare_clinical", "family_history", "segregation_testing"],
+    "chromosome_duplication_general": ["verify_report", "compare_clinical", "family_history", "segregation_testing"],
+    "mosaicism_general": ["verify_report", "compare_clinical", "additional_databases", "prepare_questions"],
+    "translocation_general": ["verify_report", "family_history", "segregation_testing", "prepare_questions"],
+    "conflicting_classification": ["verify_report", "check_reclassification", "additional_databases", "compare_clinical"],
+    "specific_variant": ["verify_report", "check_reclassification", "compare_clinical", "prepare_questions"],
+}
+
+_CLARIFICATION_ALLOWLIST_DICT: dict = dict(_CLARIFICATION_ALLOWLIST)
+
+
+def _build_clarification_guidance(topic_hint: str) -> "Optional[str]":
+    """
+    Build a concise patient-facing section listing 2-4 ways the genetics team
+    may clarify an unresolved finding.
+
+    Items are selected deterministically from _CLARIFICATION_ALLOWLIST using
+    the topic_hint.  AI is never used to invent new guidance items.
+
+    Returns None when the topic does not warrant clarification guidance (e.g.,
+    general educational questions, curated approved answers).
+
+    Safety: every item is team-oriented ('הצוות עשוי...'); no personal test
+    ordering, no diagnosis, no treatment recommendation.
+    """
+    keys = _CLARIFICATION_TOPIC_ITEMS.get(topic_hint)
+    if not keys:
+        return None
+    items = [_CLARIFICATION_ALLOWLIST_DICT[k] for k in keys if k in _CLARIFICATION_ALLOWLIST_DICT]
+    if not items:
+        return None
+    header = "מה יכול לעזור לצוות להבהיר את הממצא?"
+    intro = "בהתאם לממצא, הצוות הגנטי עשוי להיעזר בדברים הבאים:"
+    bullets = "\n".join(f"• {item}" for item in items)
+    return f"{header}\n\n{intro}\n{bullets}"
 
 
 def _mentions_vus(text: str) -> bool:
@@ -384,6 +457,161 @@ def _build_vus_clinvar_gene_note(gene: str, g_summary: Optional[dict]) -> Option
         "מידע זה מתאר את הרשומות במאגר ואינו מפרש את הממצא האישי שלך."
     )
     return " ".join(sentences)
+
+
+# ---------------------------------------------------------------------------
+# Part C (27.10) — Patient-friendly ClinVar interpretation
+# ---------------------------------------------------------------------------
+
+# Queries that ask explicitly about what ClinVar statistics mean — routed to
+# the deterministic interpretation function rather than the raw stats display.
+_CLINVAR_MEANING_QUERY_TOKENS: frozenset = frozenset({
+    "מה אומר שיש הרבה vus",
+    "מה אומר שיש הרבה vu",
+    "הרבה vus בגן",
+    "הרבה vu בגן",
+    "מה משמעות הרבה",
+    "pathogenic זה אומר שהממצא",
+    "pathogenic אומר שהממצא",
+    "מה זה אומר שיש pathogenic",
+    "conflicting classifications",
+    "conflicting classification",
+    "classification conflicts",
+    "מדוע מספר הרשומות",
+    "מספר הרשומות לא אומר",
+    "הרשומות לא מתארות",
+    "מה המשמעות של הנתונים",
+    "מה אומרים הנתונים",
+    "מה אומרות הסטטיסטיקות",
+    "מה המשמעות של מספר הרשומות",
+})
+
+
+def _is_clinvar_meaning_query(question: str) -> bool:
+    """Return True when the patient explicitly asks what ClinVar stats MEAN."""
+    q = question.lower()
+    return any(token in q for token in _CLINVAR_MEANING_QUERY_TOKENS)
+
+
+def _build_clinvar_patient_interpretation(gene: str, summary: "Optional[dict]") -> str:
+    """
+    Build a deterministic patient-friendly explanation of what the ClinVar
+    statistics mean — and what they do NOT mean.
+
+    Part C (27.10): no LLM, no physician review needed.
+    Based on displayed fields only: total_variants, by_significance, phenotypes.
+
+    Universal interpretation rules encoded here:
+    - record count ≠ personal risk
+    - significance breakdown describes different variants, not the user's
+    - pathogenic records ≠ every variant is pathogenic
+    - many VUS = insufficient evidence for those variants
+    - conflicting = submitters interpreted some variants differently
+    - listed conditions = reported associations, not a personal diagnosis
+    """
+    header = "מה המשמעות של הנתונים האלה?"
+    lines = [header, ""]
+
+    if not summary:
+        lines.append(
+            "נתוני ClinVar מתארים את כלל הוריאנטים שדווחו עבור הגן — "
+            "לא את הממצא הספציפי שלך."
+        )
+        return "\n".join(lines)
+
+    total = summary.get("total_variants") or 0
+    by_sig = summary.get("by_significance") or {}
+
+    # Rule 1: total count ≠ personal risk
+    if total > 0:
+        lines.append(
+            f"מספר הרשומות הכולל ({total:,}) מתאר את כל הוריאנטים השונים שדווחו עבור הגן "
+            f"— לא את הממצא האישי שלך. מספר גבוה של רשומות אינו מעיד על סיכון אישי גבוה יותר."
+        )
+
+    # Rule 2: significance breakdown
+    has_path = any("pathogenic" in k.lower() and "benign" not in k.lower()
+                   and "conflicting" not in k.lower() for k in by_sig)
+    has_vus = any("uncertain" in k.lower() for k in by_sig)
+    has_conflict = any("conflicting" in k.lower() for k in by_sig)
+
+    if has_path:
+        lines.append(
+            "העובדה שקיימות רשומות pathogenic בגן אינה אומרת שהוריאנט שלך הוא pathogenic — "
+            "כל וריאנט מסווג בנפרד על סמך ראיות ספציפיות לו."
+        )
+    if has_vus:
+        lines.append(
+            "רשומות VUS מציינות וריאנטים שעדיין אין לגביהם מספיק ראיות מדעיות לסיווג סופי — "
+            "זה מצב שכיח ואינו פוסל ממצאים אחרים."
+        )
+    if has_conflict:
+        lines.append(
+            "סיווגים מתנגשים (conflicting) פירושם שמעבדות שונות פירשו וריאנטים מסוימים "
+            "באופן שונה — דבר שכיח בגנטיקה קלינית ולא בהכרח נוגע לוריאנט שלך."
+        )
+
+    # Rule 3: conditions listed ≠ personal diagnosis
+    lines.append(
+        "המצבים הרפואיים המופיעים בכרטיס הם מצבים שנמצאו בדיווחים קשורים לגן — "
+        "הם אינם אבחנה עבורך. כדי להבין את הממצא האישי שלך יש לפנות לצוות הגנטי."
+    )
+
+    # Rule 4: data changes
+    lines.append(
+        "נתוני ClinVar מתעדכנים ככל שמצטברות ראיות חדשות — הסיווג עשוי להשתנות בעתיד."
+    )
+
+    return "\n".join(lines)
+
+
+# Detect explicit questions about what ClinVar statistics mean for patients.
+_CLINVAR_META_QUESTION_TOKENS: frozenset = frozenset({
+    "מה אומר שיש הרבה",
+    "הרבה vus",
+    "הרבה vu",
+    "pathogenic זה אומר",
+    "pathogenic אומר",
+    "conflicting classifications",
+    "מספר הרשומות",
+    "מה המשמעות של הנתונים",
+    "מה המשמעות של מספר",
+    "מדוע מספר",
+    "לא אומר מה יש לי",
+    "הנתונים לא",
+})
+
+
+def _is_clinvar_meta_question(question: str) -> bool:
+    """Return True when the question asks what ClinVar database statistics mean."""
+    q = question.lower()
+    return any(token in q for token in _CLINVAR_META_QUESTION_TOKENS)
+
+
+def _build_clinvar_meta_interpretation_answer(question: str, gene: "Optional[str]") -> dict:
+    """
+    Direct answer for 'what do these ClinVar numbers mean?' questions.
+    Routes to the patient-friendly interpretation — no LLM, no physician review.
+    """
+    summary = None
+    if gene and gene_index._GENE_INDEX_AVAILABLE:
+        summary = gene_index.get_gene_summary(gene)
+    interpretation = _build_clinvar_patient_interpretation(gene or "הגן", summary)
+    suggested = [
+        "מה ההבדל בין pathogenic ל-VUS?",
+        "מדוע אותו גן יכול להיות pathogenic אצל אחד ו-benign אצל אחר?",
+        "מה השאלות שכדאי לשאול את הצוות הגנטי על הממצא?",
+    ]
+    return {
+        "answer": interpretation,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": "clinvar_interpretation",
+        "suggested_questions": suggested,
+        "llm_used": False,
+        "fallback_used": True,
+        "llm_mode": "none",
+    }
 
 
 _CLINVAR_EXPLICIT_QUERY_TOKENS = frozenset({
@@ -720,6 +948,11 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
             "ככל שמצטברות ראיות מדעיות חדשות."
         )
         parts = [opening, vus_practical]
+
+    # Part B (27.10): append clarification guidance for unresolved VUS findings.
+    _clarification = _build_clarification_guidance("vus_known_gene")
+    if _clarification:
+        parts.append(_clarification)
 
     entry = kb.get_by_id("vus_known_gene")
     suggested = list(entry.get("suggested_questions", [])) if entry else list(_GENE_SUGGESTED_QUESTIONS)  # noqa: F821
@@ -5207,14 +5440,12 @@ def _build_gene_clinvar_answer(
             _MUTATION_GENE_PREAMBLE_HE.format(gene=gene)
             if _is_mutation_specific_question(question) else ""
         )
-        # Intent-aware LLM expansion for curated function questions
-        if source_type == "curated" and _is_gene_function_question(question):
-            _expanded = _phrase_curated_function_answer(gene, source_text, question)
-            main_text = preamble + (_expanded if _expanded else source_text)
-            _llm_used = _expanded is not None
-        else:
-            main_text = preamble + source_text
-            _llm_used = source_type == "grounded_clinvar"
+        # Part A (27.10): curated and physician-approved content is already clear
+        # and authoritative — do not call the LLM to rephrase it.
+        # grounded_clinvar still uses the LLM phrasing step (it synthesizes
+        # ClinVar phenotype data into readable Hebrew, which differs from rephrasing).
+        main_text = preamble + source_text
+        _llm_used = source_type == "grounded_clinvar"
 
         main_answer = _correction_note + main_text
 
@@ -5264,6 +5495,10 @@ def _build_gene_clinvar_answer(
         if summary:
             gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
             gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+            # Part C (27.10): patient-friendly interpretation of what the stats mean.
+            gene_meta["clinvar_patient_interpretation"] = _build_clinvar_patient_interpretation(
+                gene, summary
+            )
 
         result: dict = {
             "answer": main_answer,
@@ -5362,6 +5597,10 @@ def _build_gene_clinvar_answer(
         if summary:
             gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
             gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+            # Part C (27.10): patient-friendly interpretation of ClinVar stats.
+            gene_meta["clinvar_patient_interpretation"] = _build_clinvar_patient_interpretation(
+                gene, summary
+            )
 
         result = {
             "answer": main_answer,
@@ -6005,6 +6244,7 @@ def _answer_question_impl(
     Returns a dict with keys: answer, safety_level, needs_genetic_counselor,
     matched_topic, suggested_questions.
     """
+    _t0 = _time.monotonic()
     text = (question or "").strip()
     safe_context = _sanitize_context(conversation_context)
 
@@ -6012,10 +6252,17 @@ def _answer_question_impl(
     # classify_question_intent() runs ALL safety and routing checks once.
     # Its result drives routing for steps A–F below.
     # Steps 5–7 (KB follow-up, KB lookup, fallback) run after intent routing.
-    # last_gene_symbol is intentionally NOT passed — context bleed prevention.
-    # Gene follow-up routing via prior context is disabled; every question is
-    # classified on its own text only.
-    intent_info = classify_question_intent(text, last_gene_symbol=None, topic=topic)
+    #
+    # Part D (27.10): safely pass session_context.gene_symbol so pronoun-based
+    # follow-ups ("ומה התפקיד שלו?") route to the prior gene when Step F fires.
+    # Step F requires BOTH last_gene_symbol AND _has_gene_followup_signal() being
+    # True, so standalone concept questions never accidentally resolve to prior gene.
+    _ctx_gene_for_routing = None
+    if session_context:
+        _g = (session_context.get("gene_symbol") or "").strip().upper()
+        if _g and re.match(r"^[A-Z0-9]{2,20}$", _g):
+            _ctx_gene_for_routing = _g
+    intent_info = classify_question_intent(text, last_gene_symbol=_ctx_gene_for_routing, topic=topic)
     intent = intent_info["intent"]
 
     # A. Privacy identifiers — block, never reach LLM/KB/ClinVar.
@@ -6072,6 +6319,13 @@ def _answer_question_impl(
             text, intent_info.get("sub_intent", "chromosome_finding_general"),
             chromosome_number=_b7_chr_num,
         )
+
+    # B.9. Part C (27.10): Direct question about what ClinVar statistics mean.
+    # Fires before specific-variant and personal-interpretation checks.
+    # Uses session_context gene_symbol (if any) to contextualize the interpretation.
+    if not topic and _is_clinvar_meta_question(text):
+        _ctx_gene = (session_context or {}).get("gene_symbol")
+        return _build_clinvar_meta_interpretation_answer(text, _ctx_gene)
 
     # C. Specific named variant (HGVS / rsID) — educational evidence summary,
     #    not refused outright; runs before personal-interpretation check.
@@ -6408,6 +6662,32 @@ def _build_session_context_out(
     if _scope and isinstance(_scope, str) and len(_scope) <= 30:
         ctx_out["last_answer_scope"] = _scope
 
+    # Part D (27.10): unresolved_question_type — tracks whether the current turn
+    # represents an unresolved finding, for downstream clarification guidance.
+    _unresolved_type: "Optional[str]" = None
+    if matched in ("vus", "vus_known_gene", "vus_general"):
+        _unresolved_type = "vus"
+    elif matched in _CHROMOSOME_TOPIC_INTENTS:
+        _unresolved_type = "chromosome_finding"
+    elif matched == "specific_variant":
+        _unresolved_type = "variant"
+    elif matched == "clinvar_interpretation":
+        # Carry forward the prior unresolved type when answering a meta-question
+        _unresolved_type = (session_context or {}).get("unresolved_question_type")
+    if _unresolved_type:
+        ctx_out["unresolved_question_type"] = _unresolved_type
+
+    # variant_classification — carries the current finding's classification forward
+    # (e.g. "vus", "pathogenic", "benign") for drift-control on follow-up turns.
+    # Only set from gene_metadata when a gene answer was produced.
+    _gk_status = gene_meta.get("gene_knowledge_status")
+    if matched in ("vus", "vus_known_gene") and _gk_status:
+        ctx_out["variant_classification"] = "vus"
+    elif session_context and "variant_classification" in session_context and matched in (
+        "vus_known_gene", "gene_clinvar_summary", "clinvar_interpretation"
+    ):
+        ctx_out["variant_classification"] = session_context["variant_classification"]
+
     return ctx_out
 
 
@@ -6423,6 +6703,7 @@ def answer_question(
     Public entry point for POST /ask.  Delegates to _answer_question_impl()
     and appends session_context_out for the frontend to store and echo back.
     """
+    _t0 = _time.monotonic()
     result = _answer_question_impl(
         question=question,
         topic=topic,
@@ -6431,6 +6712,9 @@ def answer_question(
         include_unverified_gene_draft=include_unverified_gene_draft,
         session_context=session_context,
     )
+    _elapsed_ms = round((_time.monotonic() - _t0) * 1000)
+    # Internal timing — never displayed to patients; available for server-side profiling.
+    result["_response_time_ms"] = _elapsed_ms
     result["session_context_out"] = _build_session_context_out(
         result, (question or "").strip(), session_context
     )
