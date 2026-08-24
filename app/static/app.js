@@ -3,7 +3,7 @@
 // ── State (in-memory only — nothing is persisted, per the no-history rule) ──
 // { id, role:'user'|'bot'|'bot-pending', text, safetyLevel, suggestedQuestions,
 //   clinicianQuestions, matchedTopic, geneMetadata, llmUsed, fallbackUsed,
-//   feedbackState, isWelcome, chromosomeNumber, normalizedIntent }
+//   isWelcome, chromosomeNumber, normalizedIntent }
 let messages = [];
 let isSending = false;
 let lastTopic = null;
@@ -23,14 +23,6 @@ const DEMO_QUESTIONS = [
   { label: 'האם VUS משתנה?',        question: 'האם VUS יכול להשתנות בעתיד?' },
   { label: 'VUS והחלטות רפואיות',   question: 'למה בדרך כלל לא מקבלים החלטות רפואיות רק לפי VUS?' },
   { label: 'מה זה גן?',             question: 'מה זה גן?' },
-];
-
-// ── Feedback preset reasons ───────────────────────────────────────────────
-const FEEDBACK_REASONS = [
-  'התשובה לא הייתה רלוונטית',
-  'התשובה לא הייתה ברורה',
-  'התשובה לא ענתה על שאלתי',
-  'מידע חסר',
 ];
 
 const PENDING_TEXT_HE = 'כותב תשובה...';
@@ -259,7 +251,6 @@ function setSendingUiState(sending) {
   byId('btn-send').disabled = sending;
   document.querySelectorAll('.suggested-chip').forEach((c) => { c.disabled = sending; });
   document.querySelectorAll('.demo-btn').forEach((b) => { b.disabled = sending; });
-  document.querySelectorAll('.feedback-btn').forEach((b) => { b.disabled = sending; });
 }
 
 // ── Message state ─────────────────────────────────────────────────────────────
@@ -275,7 +266,6 @@ function addMessage(role, text, safetyLevel, suggestedQuestions, matchedTopic, g
     geneMetadata: geneMetadata || null,
     llmUsed: llmUsed || false,
     fallbackUsed: fallbackUsed !== undefined ? fallbackUsed : true,
-    feedbackState: null,
     isWelcome: isWelcome || false,
     unverifiedDraft: null,
     unverifiedDraftState: null,
@@ -296,7 +286,6 @@ function replaceMessage(id, role, text, safetyLevel, suggestedQuestions, matched
     msg.geneMetadata = geneMetadata || null;
     msg.llmUsed = llmUsed || false;
     msg.fallbackUsed = fallbackUsed !== undefined ? fallbackUsed : true;
-    if (msg.feedbackState === undefined) msg.feedbackState = null;
     if (msg.unverifiedDraft === undefined) msg.unverifiedDraft = null;
     if (msg.unverifiedDraftState === undefined) msg.unverifiedDraftState = null;
     if (msg.generalDraft === undefined) msg.generalDraft = null;
@@ -307,32 +296,17 @@ function replaceMessage(id, role, text, safetyLevel, suggestedQuestions, matched
   renderMessages();
 }
 
-// ── Feedback ──────────────────────────────────────────────────────────────────
 
-async function submitFeedback(msgId, helpful, reason) {
-  const msg = messages.find((m) => m.id === msgId);
-  if (!msg) return;
-  msg.feedbackState = 'submitted';
-  renderMessages();
-
-  try {
-    await fetch('/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        helpful,
-        reason: reason || null,
-        matched_topic: msg.matchedTopic || null,
-        safety_level: msg.safetyLevel || null,
-        question_length: (() => {
-          const prev = messages.find((m) => m.id === msgId - 1);
-          return prev ? (prev.text || '').length : null;
-        })(),
-      }),
-    });
-  } catch (_) {
-    // Feedback submission failure is silent — never disrupts the user session
-  }
+// ── ClinVar trivial-phenotype filter (mirrors server-side set) ────────────────
+const _TRIVIAL_PHENOS = new Set([
+  'not specified', 'not provided', 'see cases', 'not applicable',
+  'all disease', 'disease', '', 'none provided', 'not determined',
+  '8 conditions', 'multiple conditions', 'conditions', 'other',
+  '-', 'n/a', 'na', 'unknown', 'not stated', 'various',
+]);
+function filterPhenotypes(list) {
+  if (!list) return [];
+  return list.filter(p => !_TRIVIAL_PHENOS.has((p || '').toLowerCase().trim()));
 }
 
 // ── Gene metadata expandable panel ────────────────────────────────────────────
@@ -360,22 +334,26 @@ function buildGeneMetadataHtml(meta) {
   // Significance breakdown and phenotypes are shown in the separate ClinVar
   // technical card for Tier 2 — do not duplicate them here.
   let sigHtml = '';
-  if (meta.answer_tier !== 'tier2' && meta.significance_breakdown && Object.keys(meta.significance_breakdown).length) {
-    const sigRows = Object.entries(meta.significance_breakdown)
+  if (meta.answer_tier !== 'tier2' && meta.significance_breakdown) {
+    const sigEntries = Object.entries(meta.significance_breakdown)
+      .filter(([, v]) => v > 0)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([k, v]) => `<tr><th>${escHtml(k)}</th><td>${Number(v).toLocaleString('he-IL')}</td></tr>`)
-      .join('');
-    sigHtml = `<p class="gene-meta-section-label">סיווגים קליניים:</p><table class="gene-meta-table">${sigRows}</table>`;
+      .slice(0, 6);
+    if (sigEntries.length) {
+      const sigRows = sigEntries
+        .map(([k, v]) => `<tr><th>${escHtml(k)}</th><td>${Number(v).toLocaleString('he-IL')}</td></tr>`)
+        .join('');
+      sigHtml = `<p class="gene-meta-section-label">סיווגים קליניים:</p><table class="gene-meta-table">${sigRows}</table>`;
+    }
   }
 
   let phenoHtml = '';
-  if (meta.answer_tier !== 'tier2' && meta.top_phenotypes && meta.top_phenotypes.length) {
-    const items = meta.top_phenotypes
-      .slice(0, 6)
-      .map(p => `<li>${escHtml(p)}</li>`)
-      .join('');
-    phenoHtml = `<p class="gene-meta-section-label">מצבים קשורים מדווחים:</p><ul class="gene-meta-phenotypes">${items}</ul>`;
+  if (meta.answer_tier !== 'tier2') {
+    const phenos = filterPhenotypes(meta.top_phenotypes).slice(0, 6);
+    if (phenos.length) {
+      const items = phenos.map(p => `<li>${escHtml(p)}</li>`).join('');
+      phenoHtml = `<p class="gene-meta-section-label">מצבים קשורים מדווחים:</p><ul class="gene-meta-phenotypes">${items}</ul>`;
+    }
   }
 
   return (
@@ -472,11 +450,6 @@ function renderMessages() {
         if (genCard) bubble.appendChild(genCard);
       }
 
-      // Feedback row (skip for welcome message)
-      if (!m.isWelcome) {
-        const feedbackRow = buildFeedbackRow(m);
-        if (feedbackRow) bubble.appendChild(feedbackRow);
-      }
     }
 
     row.appendChild(bubble);
@@ -490,8 +463,12 @@ function renderMessages() {
 
 function buildClinvarTechCard(meta) {
   if (!meta || meta.answer_tier !== 'tier2') return null;
-  const hasSig = meta.significance_breakdown && Object.keys(meta.significance_breakdown).length;
-  const hasPheno = meta.top_phenotypes && meta.top_phenotypes.length;
+  const sigEntries = meta.significance_breakdown
+    ? Object.entries(meta.significance_breakdown).filter(([, v]) => v > 0)
+    : [];
+  const hasSig = sigEntries.length > 0;
+  const phenoList = filterPhenotypes(meta.top_phenotypes).slice(0, 6);
+  const hasPheno = phenoList.length > 0;
   if (!hasSig && !hasPheno && meta.total_variants == null) return null;
 
   const card = document.createElement('div');
@@ -525,7 +502,7 @@ function buildClinvarTechCard(meta) {
 
     const table = document.createElement('table');
     table.className = 'clinvar-tech-table';
-    Object.entries(meta.significance_breakdown)
+    sigEntries
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6)
       .forEach(([k, v]) => {
@@ -546,7 +523,7 @@ function buildClinvarTechCard(meta) {
 
     const ul = document.createElement('ul');
     ul.className = 'clinvar-tech-phenotypes';
-    meta.top_phenotypes.slice(0, 6).forEach(p => {
+    phenoList.forEach(p => {
       const li = document.createElement('li');
       li.textContent = p;
       ul.appendChild(li);
@@ -556,7 +533,7 @@ function buildClinvarTechCard(meta) {
 
   const note = document.createElement('p');
   note.className = 'clinvar-tech-note';
-  note.textContent = 'הנתונים לעיל לקוחים ממאגר ClinVar בלבד ואינם מהווים פרשנות אישית של ממצא הבדיקה.';
+  note.textContent = 'נתונים אלה לקוחים ממאגר ClinVar הציבורי ומשקפים דיווחים מעבדתיים מצטברים — לא פרשנות של הממצא הספציפי שלך. הפירוש האישי שמור לצוות הגנטי המטפל בך.';
   details.appendChild(note);
 
   card.appendChild(details);
@@ -707,87 +684,3 @@ function buildGeneralDraftCard(msg) {
   return badge;
 }
 
-// ── Feedback row ──────────────────────────────────────────────────────────────
-
-function buildFeedbackRow(msg) {
-  if (msg.role === 'bot-pending') return null;
-
-  const wrap = document.createElement('div');
-  wrap.className = 'feedback-row';
-
-  if (msg.feedbackState === 'submitted') {
-    const thanks = document.createElement('span');
-    thanks.className = 'feedback-thanks';
-    thanks.textContent = 'תודה על המשוב!';
-    wrap.appendChild(thanks);
-    return wrap;
-  }
-
-  // "Was this helpful?" label
-  const label = document.createElement('span');
-  label.className = 'feedback-label';
-  label.textContent = 'האם התשובה עזרה?';
-  wrap.appendChild(label);
-
-  // Helpful button
-  const btnYes = document.createElement('button');
-  btnYes.type = 'button';
-  btnYes.className = `feedback-btn feedback-btn--yes ${msg.feedbackState === 'helpful' ? 'feedback-btn--active' : ''}`;
-  btnYes.title = 'כן, עזר';
-  btnYes.textContent = 'כן';
-  btnYes.disabled = isSending;
-  btnYes.addEventListener('click', () => {
-    msg.feedbackState = 'helpful';
-    renderMessages();
-    submitFeedback(msg.id, true, null);
-  });
-  wrap.appendChild(btnYes);
-
-  // Not helpful button — reveals reason selector
-  const btnNo = document.createElement('button');
-  btnNo.type = 'button';
-  btnNo.className = `feedback-btn feedback-btn--no ${msg.feedbackState === 'not_helpful' ? 'feedback-btn--active' : ''}`;
-  btnNo.title = 'לא עזר';
-  btnNo.textContent = 'לא';
-  btnNo.disabled = isSending;
-  btnNo.addEventListener('click', () => {
-    msg.feedbackState = 'not_helpful';
-    renderMessages();
-  });
-  wrap.appendChild(btnNo);
-
-  // Reason selector (only when "not helpful" clicked, before submission)
-  if (msg.feedbackState === 'not_helpful') {
-    const reasonWrap = document.createElement('div');
-    reasonWrap.className = 'feedback-reason-wrap';
-
-    const sel = document.createElement('select');
-    sel.className = 'feedback-reason-select';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'סיבה (אופציונלי)';
-    placeholder.disabled = true;
-    placeholder.selected = true;
-    sel.appendChild(placeholder);
-
-    FEEDBACK_REASONS.forEach((r) => {
-      const opt = document.createElement('option');
-      opt.value = r; opt.textContent = r;
-      sel.appendChild(opt);
-    });
-
-    const sendBtn = document.createElement('button');
-    sendBtn.type = 'button';
-    sendBtn.className = 'feedback-send-btn';
-    sendBtn.textContent = 'שלח';
-    sendBtn.addEventListener('click', () => {
-      submitFeedback(msg.id, false, sel.value || null);
-    });
-
-    reasonWrap.appendChild(sel);
-    reasonWrap.appendChild(sendBtn);
-    wrap.appendChild(reasonWrap);
-  }
-
-  return wrap;
-}

@@ -165,12 +165,8 @@ def _compose_vus_practical_answer(gene: Optional[str]) -> str:
         "• האם הממצא אומר שיש לי מחלה, או שמשמעותו עדיין לא ידועה?"
     )
 
-    # Part B (27.10): append bounded clarification guidance.
-    clarification = _build_clarification_guidance("vus")
-    parts_list = [p1, p2, questions]
-    if clarification:
-        parts_list.append(clarification)
-    return "\n\n".join(parts_list)
+    # Session 27.13 Part G: one guidance section per response — question list suffices.
+    return "\n\n".join([p1, p2, questions])
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +379,9 @@ _BENIGN_SIG_KEYS = frozenset({
 _CLINVAR_NOTE_TRIVIAL_PHENOS = frozenset({
     "not specified", "not provided", "see cases", "not applicable",
     "all disease", "disease", "", "none provided", "not determined",
+    # Session 27.13 Part E: generic ClinVar placeholders that carry no patient value
+    "8 conditions", "multiple conditions", "conditions", "other",
+    "-", "n/a", "na", "unknown", "not stated", "various",
 })
 
 
@@ -1048,7 +1047,7 @@ def _build_known_gene_answer(gene: str, question: str = "", include_unverified_g
         "source_grounded": expl_source == "grounded_clinvar",
         "unverified_gene_draft_available": expl_source == "ai_unreviewed",
         "significance_breakdown": g_summary.get("by_significance") or {} if g_summary else {},
-        "top_phenotypes": (g_summary.get("phenotypes") or [])[:6] if g_summary else [],
+        "top_phenotypes": _clean_clinvar_phenotypes(g_summary.get("phenotypes") or [])[:6] if g_summary else [],
     }
 
     result: dict = {
@@ -5549,7 +5548,7 @@ def _build_gene_clinvar_answer(
             gene_meta["draft_hidden_reason"] = "approved_text_is_main_answer"
         if summary:
             gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
-            gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+            gene_meta["top_phenotypes"] = _clean_clinvar_phenotypes(summary.get("phenotypes") or [])[:6]
             # Part C (27.10): patient-friendly interpretation of what the stats mean.
             gene_meta["clinvar_patient_interpretation"] = _build_clinvar_patient_interpretation(
                 gene, summary
@@ -5651,7 +5650,7 @@ def _build_gene_clinvar_answer(
         }
         if summary:
             gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
-            gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+            gene_meta["top_phenotypes"] = _clean_clinvar_phenotypes(summary.get("phenotypes") or [])[:6]
             # Part C (27.10): patient-friendly interpretation of ClinVar stats.
             gene_meta["clinvar_patient_interpretation"] = _build_clinvar_patient_interpretation(
                 gene, summary
@@ -5728,7 +5727,7 @@ def _build_gene_clinvar_answer(
     }
     if summary:
         gene_meta["significance_breakdown"] = summary.get("by_significance") or {}
-        gene_meta["top_phenotypes"] = (summary.get("phenotypes") or [])[:6]
+        gene_meta["top_phenotypes"] = _clean_clinvar_phenotypes(summary.get("phenotypes") or [])[:6]
     return {
         "answer": main_answer,
         "safety_level": "general_information",
@@ -6309,7 +6308,8 @@ def _build_prenatal_deletion_vus_answer(gene: str, question: str) -> dict:
         "",
         "**VUS בהקשר פרנטלי**",
         "ממצא VUS בעובר אינו אבחנה ואינו מוכיח שתהיה בעיה — אך גם לא שולל זאת. "
-        "הצוות הגנטי יבחן את הממצא בהקשר הקליני ויעקוב אחר מחקרים חדשים.",
+        "הצוות הגנטי יבחן את הממצא בהקשר הקליני המלא. "
+        "הסיווג עשוי להתעדכן בעתיד ככל שמצטברות ראיות מדעיות.",
         "",
         "**שאלות שכדאי לשאול את הצוות הגנטי**",
         "• מה גודל החסר, ואיזה גנים כלולים בו?",
@@ -6451,9 +6451,10 @@ def _build_simplify_answer(session_context: dict) -> dict:
         if (finding_type in ("deletion", "chromosome_deletion_general")
                 or active_topic == "prenatal_vus_deletion") and is_prenatal:
             summary = (
-                f"בקיצור: נמצא בבדיקת microarray שיש לעובר חסר (deletion) הכולל את {gene_disp}. "
-                "החסר סווג כ-VUS — כלומר המשמעות הקלינית שלו עדיין לא ברורה. "
-                "VUS אינו אבחנה של מחלה, אך גם לא ממצא שפיר מוכח; הצוות ימשיך לעקוב."
+                f"בקיצור: נמצא לעובר חסר (deletion) הכולל את {gene_disp}. "
+                "החסר סווג כ-VUS — המשמעות הקלינית שלו עדיין לא ברורה. "
+                "VUS אינו אבחנה, אך גם לא ממצא שפיר מוכח. "
+                "הסיווג עשוי להשתנות בעתיד ככל שמצטברות ראיות."
             )
         elif gene:
             summary = (
