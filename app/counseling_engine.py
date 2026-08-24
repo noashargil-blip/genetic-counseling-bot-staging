@@ -6319,9 +6319,6 @@ def _build_prenatal_deletion_vus_answer(gene: str, question: str) -> dict:
         "• כיצד תדעו אם הסיווג ישתנה בעתיד?",
     ]
     answer = "\n".join(lines)
-    _clarification = _build_clarification_guidance("chromosome_deletion_general")
-    if _clarification:
-        answer = answer + "\n\n" + _clarification
     return {
         "answer": answer,
         "safety_level": "general_information",
@@ -6374,6 +6371,11 @@ _FOLLOWUP_INTENTS_V2: dict = {
         "מה זה אומר להריון",
         "מה זה אומר למשפחה שלי",
         "מה זה אומר במקרה שלי",
+        # Session 27.12 Part B: prenatal-phrasing gaps
+        "עבור העובר שלי",
+        "עבור העובר",
+        "מה זה אומר בעצם",
+        "אז מה זה אומר",
     ],
     "concern_about_disease_association": [
         "אבל כתבת ש",
@@ -6402,6 +6404,9 @@ _FOLLOWUP_INTENTS_V2: dict = {
         "מה להמשיך",
         "כיצד להמשיך",
         "מה מקובל לעשות",
+        # Session 27.12 Part B: "לי" insertion gap
+        "מה כדאי לי לשאול",
+        "כדאי לי לשאול",
     ],
     "clarify_uncertainty": [
         "למה לא ידועה",
@@ -6492,11 +6497,20 @@ def _build_personal_meaning_answer(session_context: dict) -> dict:
     gene_disp = f"הגן {gene}" if gene else "הגן"
 
     if is_prenatal:
+        gene_note = f" הכולל את הגן {gene}" if gene else ""
         answer = (
-            "אני יכול להסביר מושגים גנטיים כלליים, אך לא יכול לפרש ממצא ספציפי עבורך ועבור ההריון. "
-            "הפירוש של ממצא פרנטלי תלוי בפרטים רבים: גודל החסר, הגנים הכלולים בו, "
-            "האם הממצא ירוש או de novo, ממצאי האולטרסאונד, ועוד. "
-            "הצוות הגנטי שמטפל בך הוא הגורם המוסמך לפרש את המשמעות הספציפית עבורך."
+            f"**VUS בממצא פרנטלי — מה המשמעות הכללית?**\n\n"
+            f"VUS (Variant of Uncertain Significance) אינו אבחנה. "
+            f"חסר (deletion){gene_note} שסווג כ-VUS אומר שאין עדיין מספיק ראיות "
+            "להחליט אם יש לו השפעה קלינית — לא הוכח שהוא מזיק, "
+            "ולא הוכח שהוא שפיר לחלוטין.\n\n"
+            "**מה משפיע על הפירוש הספציפי?**\n"
+            "• גודל החסר הכולל — לא רק הגן הספציפי\n"
+            "• כל הגנים הכלולים באזור המחוסר\n"
+            "• האם החסר ירוש מהורה (inherited) או חדש (de novo)\n"
+            "• ממצאי האולטרסאונד\n\n"
+            "הפירוש הספציפי בהקשר שלך יינתן על ידי הצוות הגנטי המטפל בך, "
+            "שמחזיק את מלוא הנתונים הקליניים."
         )
     else:
         answer = (
@@ -6797,6 +6811,30 @@ def _answer_question_impl(
                 )
                 if _ctx_fui_result is not None:
                     return _ctx_fui_result
+
+        # Part C (27.12): gene-info question within active prenatal deletion finding.
+        # No recognized follow-up intent matched; user names the gene already in context.
+        # Return gene info + one-sentence note that the gene alone doesn't interpret the deletion.
+        if (not _ctx_fui
+                and session_context.get("active_topic") == "prenatal_vus_deletion"):
+            _c_gene_in_text = _detect_known_gene(text)
+            if not _c_gene_in_text and gene_index._GENE_INDEX_AVAILABLE:
+                _c_gene_in_text = _extract_gene_symbol_from_question(text)
+            _c_gene_current = (session_context.get("gene_symbol") or "").strip().upper() or None
+            if (_c_gene_in_text and _c_gene_current
+                    and _c_gene_in_text.upper() == _c_gene_current.upper()):
+                _c_gene_result = _build_known_gene_answer(
+                    _c_gene_in_text, question=text, include_unverified_gene_draft=True
+                )
+                if _c_gene_result:
+                    _c_note = (
+                        f"\n\n**הערה**: מידע זה מתייחס לגן {_c_gene_in_text.upper()} "
+                        "ככלי הבנה גנטית — לא לממצא החסר הפרנטלי הספציפי שלך. "
+                        "פירוש החסר המלא דורש בחינת ההקשר הכולל על ידי הצוות הגנטי."
+                    )
+                    _c_gene_result = dict(_c_gene_result)
+                    _c_gene_result["answer"] = _c_gene_result["answer"] + _c_note
+                    return _c_gene_result
 
     # B.3. Extra sex chromosome educational answer.
     if intent == "extra_chromosome_education":
