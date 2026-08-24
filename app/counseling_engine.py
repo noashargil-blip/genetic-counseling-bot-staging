@@ -557,7 +557,7 @@ def _build_clinvar_patient_interpretation(gene: str, summary: "Optional[dict]") 
             "מסוימים באופן שונה — דבר שכיח בגנטיקה קלינית ולא בהכרח נוגע "
             "לוריאנט שלך.",
             "",
-            "כדי להבין את הממצא האישי שלך יש לפנות לצוות הגנטי.",
+            "ההתפלגות במאגר אינה קובעת את הסיווג של הממצא הספציפי שלך.",
             "",
             "נתוני ClinVar מתעדכנים ככל שמצטברות ראיות חדשות — הסיווג עשוי "
             "להשתנות בעתיד.",
@@ -599,7 +599,7 @@ def _build_clinvar_patient_interpretation(gene: str, summary: "Optional[dict]") 
     # Rule 3: conditions listed ≠ personal diagnosis
     lines.append(
         "המצבים הרפואיים המופיעים בכרטיס הם מצבים שנמצאו בדיווחים קשורים לגן — "
-        "הם אינם אבחנה עבורך. כדי להבין את הממצא האישי שלך יש לפנות לצוות הגנטי."
+        "הם אינם אבחנה עבורך. ההתפלגות במאגר אינה קובעת את הסיווג של הממצא הספציפי שלך."
     )
 
     # Rule 4: data changes
@@ -2816,6 +2816,7 @@ MANDATORY RULES — never violate:
 - Do NOT give personal risk estimates or prognosis.
 - Do NOT interpret ISCN strings, specific reports, or coordinate notation.
 - Do NOT add a generic referral sentence such as 'יש לפנות לצוות הגנטי' or 'המידע כללי'. End naturally.
+- Do NOT use markdown tables, pipe characters (|), or any table syntax.
 - Write in Hebrew. Maximum 3 short paragraphs.
 - If you cannot generate safe content, respond with: NO_SAFE_CONTENT"""
 
@@ -3037,6 +3038,24 @@ def _build_chromosome_education_answer(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Session 27.14 Part H: markdown table stripping utility
+# ---------------------------------------------------------------------------
+
+def _strip_markdown_tables(text: str) -> str:
+    """
+    Remove lines that look like markdown table rows (start with |) from LLM output.
+    The frontend has no markdown renderer and white-space:pre-wrap, so pipe characters
+    appear literally. Legitimate HTML tables are built separately by the frontend.
+    """
+    if not text or "|" not in text:
+        return text
+    lines = text.split("\n")
+    clean = [line for line in lines if not re.match(r"^\s*\|", line)]
+    result = "\n".join(clean).strip()
+    return result
+
+
 # Source-grounded gene answer generation (Session 27.8 Parts B-C)
 # ---------------------------------------------------------------------------
 
@@ -3055,7 +3074,8 @@ MANDATORY RULES — violating any rule causes your response to be discarded:
 4. Do NOT add a generic referral sentence such as 'לפנות לצוות הגנטי' or
    'המידע כללי ואינו מחליף ייעוץ רפואי'. End the answer naturally.
 5. Maximum 100 words. Write in Hebrew only.
-6. If the context is insufficient for a meaningful patient-facing answer,
+6. Do NOT use markdown tables, pipe characters (|), or any table syntax.
+7. If the context is insufficient for a meaningful patient-facing answer,
    respond with the single word: INSUFFICIENT_CONTEXT
 
 Supplied context for gene {gene}:
@@ -3080,7 +3100,8 @@ MANDATORY RULES — violating any rule causes your response to be discarded:
    'המידע כללי ואינו מחליף ייעוץ רפואי'. End the answer naturally after
    stating the associations.
 6. Maximum 60 words. Write in Hebrew only.
-7. If the associations are too few or too generic for a meaningful answer,
+7. Do NOT use markdown tables, pipe characters (|), or any table syntax.
+8. If the associations are too few or too generic for a meaningful answer,
    respond with the single word: INSUFFICIENT_CONTEXT
 
 Supplied associations for gene {gene}:
@@ -3253,7 +3274,7 @@ def _generate_source_grounded_gene_answer(
 
     try:
         raw = client.call_text_raw(user_content, system_prompt=system_prompt)
-        text = (raw or "").strip()
+        text = _strip_markdown_tables((raw or "").strip())
         if not text or "INSUFFICIENT_CONTEXT" in text:
             _dbg(generated=False, reason="insufficient_context")
             return None
@@ -4538,7 +4559,8 @@ _GENERAL_EDUCATION_SYSTEM_PROMPT = (
     "  - Urgent clinical instructions\n"
     "  - Referral phrases (do not add 'יש לפנות לצוות הגנטי' or similar)\n"
     "  - Generic disclaimers ('המידע כללי ואינו מחליף ייעוץ רפואי')\n"
-    "  - Question marks, emoji, or ClinVar statistics\n\n"
+    "  - Question marks, emoji, or ClinVar statistics\n"
+    "  - Markdown tables, pipe characters (|), or any table/grid syntax\n\n"
     "FORMAT:\n"
     "  - Hebrew mainly; English biomedical terms allowed.\n"
     "  - 2-5 short sentences. Maximum 500 characters.\n"
@@ -4644,7 +4666,7 @@ def _generate_general_education_draft(question: str) -> "tuple[Optional[str], di
         return None, ai_debug
 
     ai_debug["generated"] = True
-    return (text or "").strip(), ai_debug
+    return _strip_markdown_tables((text or "").strip()), ai_debug
 
 
 def _build_general_education_answer(question: str) -> "tuple[Optional[dict], dict]":
@@ -6339,6 +6361,61 @@ def _build_prenatal_deletion_vus_answer(gene: str, question: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Session 27.14 Part A: entity helpers — extract mentioned conditions for context.
+# ---------------------------------------------------------------------------
+
+_COND_MATCH_SKIP_WORDS: frozenset = frozenset({
+    "the", "of", "and", "or", "type", "syndrome", "disease", "disorder",
+    "not", "specified", "provided", "other", "various", "multiple",
+})
+
+
+def _extract_conditions_for_context(result: dict) -> list:
+    """
+    Extract up to 5 cleaned, meaningful condition names from a result's gene_metadata.
+    Uses only top_phenotypes — already cleaned by _clean_clinvar_phenotypes.
+    """
+    meta = result.get("gene_metadata") or {}
+    phenos = meta.get("top_phenotypes") or []
+    return [p for p in phenos if p and len(p) >= 4][:5]
+
+
+def _find_matching_condition(query_text: str, conditions: list) -> "Optional[str]":
+    """
+    Find a condition in the list that closely matches the query text.
+    Checks Latin substring matches and fuzzy word ratio (≥ 0.70).
+    Returns the first matching condition or None.
+    Only fires for short queries or explicit terminology questions.
+    """
+    if not conditions or not query_text:
+        return None
+    q_lower = query_text.lower()
+    lat_in_q = [w for w in re.findall(r"[a-z]{4,}", q_lower) if w not in _COND_MATCH_SKIP_WORDS]
+    all_q_words = [w for w in re.split(r"[\s״’,.\-]+", q_lower) if len(w) >= 4]
+
+    from difflib import SequenceMatcher
+
+    for cond in conditions:
+        cond_lower = cond.lower()
+        cond_words = [
+            w for w in re.split(r"[\s\-]+", cond_lower)
+            if len(w) >= 4 and w not in _COND_MATCH_SKIP_WORDS
+        ]
+        for lat_w in lat_in_q:
+            if lat_w in cond_lower:
+                return cond
+        for cw in cond_words:
+            if cw in q_lower:
+                return cond
+        for q_word in all_q_words:
+            for cw in cond_words:
+                if len(q_word) >= 5 and len(cw) >= 5:
+                    if SequenceMatcher(None, q_word, cw).ratio() >= 0.70:
+                        return cond
+    return None
+
+
 # Part B: Follow-up intent patterns for context-aware routing.
 _FOLLOWUP_INTENTS_V2: dict = {
     "simplify_previous": [
@@ -6407,6 +6484,12 @@ _FOLLOWUP_INTENTS_V2: dict = {
         # Session 27.12 Part B: "לי" insertion gap
         "מה כדאי לי לשאול",
         "כדאי לי לשאול",
+        # Session 27.14: action-oriented phrases (prevent KB misroute to carrier_vs_affected)
+        "מה כדאי לעשות",
+        "מה עלי לעשות",
+        "מה כדאי לנו לעשות",
+        "מה ניתן לעשות",
+        "מה אפשר לעשות",
     ],
     "clarify_uncertainty": [
         "למה לא ידועה",
@@ -6417,6 +6500,33 @@ _FOLLOWUP_INTENTS_V2: dict = {
         "מתי תהיה תשובה",
         "אפשר לדעת יותר",
         "מה עוד אפשר לבדוק",
+    ],
+    # Session 27.14 Part B: explain previous answer and condition list inquiry.
+    "explain_previous_answer": [
+        "ומה זה",
+        "מה הכוונה בזה",
+        "מה הכוונה ב",
+        "תסביר את מה שאמרת",
+        "מה זה אומר על הגן",
+        "מה זה בדיוק אומר",
+        "אני לא מבין מה אמרת",
+        "אני לא מבינה מה אמרת",
+        "לא הבנתי מה שאמרת",
+        "מה בעצם נאמר",
+    ],
+    "condition_list_inquiry": [
+        "מה המחלות האלה",
+        "מה המצבים האלה",
+        "מה המחלות שציינת",
+        "מה הן המחלות",
+        "מה הם המצבים",
+        "ספר על המחלות",
+        "תסביר את המחלות",
+        "עליהן",
+        "על המחלות",
+        "על המצבים",
+        "ומה המחלות",
+        "ומה המצבים",
     ],
 }
 
@@ -6433,6 +6543,11 @@ def _classify_followup_intent_v2(
     if not session_context or not session_context.get("active_topic"):
         return None
     lower = text.strip().lower()
+    # Session 27.14: "מה זה אומר" without personal marker → explain_previous_answer.
+    _PERSONAL_MARKERS = ("לי", "עבורי", "לנו", "לעובר", "למשפחה", "לבן", "לבת", "לזוג")
+    if any(p in lower for p in ("מה זה אומר", "מה בעצם אומר", "מה זה אומר בעצם")):
+        if not any(m in lower for m in _PERSONAL_MARKERS):
+            return "explain_previous_answer"
     for intent_name, patterns in _FOLLOWUP_INTENTS_V2.items():
         if any(p in lower for p in patterns):
             return intent_name
@@ -6684,6 +6799,101 @@ def _validate_answer_plan(answer: str, plan: dict) -> bool:
     return True
 
 
+# Session 27.14 Part C: explain previous gene overview answer concisely.
+def _build_explain_previous_answer(session_context: dict) -> "Optional[dict]":
+    gene = (session_context.get("gene_symbol") or "").upper() or None
+    active_topic = session_context.get("active_topic", "")
+    conditions = session_context.get("mentioned_conditions") or []
+    if not gene:
+        return None
+    cond_str = ""
+    if len(conditions) == 1:
+        cond_str = f" כגון {conditions[0]}"
+    elif len(conditions) >= 2:
+        cond_str = f" כגון {conditions[0]} ו-{conditions[1]}"
+    answer = (
+        f"במילים פשוטות: {gene} הוא גן שבו נמצאים לפעמים שינויים גנטיים "
+        f"הקשורים למצבים רפואיים{cond_str}. "
+        "חשוב להבין: לא כל שינוי בגן גורם למחלה — המשמעות תלויה לחלוטין "
+        "בסוג הוריאנט הספציפי ובסיווג שנקבע בדוח הבדיקה. "
+        "הצוות הגנטי יכול לפרש מה הממצא האישי שלך אומר."
+    )
+    return {
+        "answer": answer,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": active_topic or "gene_clinvar_summary",
+        "suggested_questions": [
+            f"מה ההבדל בין שינויים שגורמים למחלה ל-VUS ב-{gene}?",
+            "כיצד מסווגים שינוי גנטי?",
+            "מה קורה אם הסיווג ישתנה בעתיד?",
+        ],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# Session 27.14 Part D: explain conditions that appeared in the previous answer.
+def _build_condition_list_answer(session_context: dict) -> "Optional[dict]":
+    gene = (session_context.get("gene_symbol") or "").upper() or None
+    conditions = session_context.get("mentioned_conditions") or []
+    active_topic = session_context.get("active_topic", "")
+    if not conditions:
+        return None
+    display = conditions[:3]
+    if len(display) == 1:
+        cond_list = display[0]
+    elif len(display) == 2:
+        cond_list = f"{display[0]} ו-{display[1]}"
+    else:
+        cond_list = f"{display[0]}, {display[1]} ו-{display[2]}"
+    gene_ref = f" בהקשר של גן {gene}" if gene else ""
+    answer = (
+        f"המצבים שהוזכרו{gene_ref} — {cond_list} — "
+        "הם שמות של מצבים רפואיים שנמצאו בדיווחים הקשורים לגן זה במאגרים ציבוריים. "
+        "חשוב לדעת: האזכור שלהם במאגר אינו אומר שאלה הממצאים האישיים שלך. "
+        "כל וריאנט מוערך בנפרד — שמות המצבים הם תיאור של דיווחים כלליים, "
+        "ולא אבחנה עבורך."
+    )
+    return {
+        "answer": answer,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": active_topic or "gene_clinvar_summary",
+        "suggested_questions": [
+            "מה ההבדל בין מצב רפואי שבדוח לבין אבחנה?",
+            "כיצד קובעים אם וריאנט קשור למצב מסוים?",
+        ],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
+# Session 27.14 Part E: contextual answer when query matches a mentioned condition name.
+def _build_condition_terminology_answer(matched_condition: str, session_context: dict) -> dict:
+    gene = (session_context.get("gene_symbol") or "").upper() or None
+    active_topic = session_context.get("active_topic", "")
+    gene_ref = f" בהקשר של גן {gene}" if gene else ""
+    answer = (
+        f"אם התכוונת ל-{matched_condition} שהוזכר{gene_ref}: "
+        "זהו שם של מצב רפואי שנמצא בדיווחים הקשורים לגן זה במאגר ClinVar. "
+        "האזכור שלו אינו מהווה אבחנה אישית — המשמעות הקלינית של כל ממצא "
+        "נקבעת על ידי הצוות הגנטי בהתאם לוריאנט הספציפי ולהקשר הקליני המלא."
+    )
+    return {
+        "answer": answer,
+        "safety_level": "general_information",
+        "needs_genetic_counselor": False,
+        "matched_topic": active_topic or "gene_clinvar_summary",
+        "suggested_questions": [
+            f"האם הממצא שלי קשור ל-{matched_condition}?",
+            "כיצד ידעו אם הוריאנט שנמצא קשור למצב מסוים?",
+        ],
+        "llm_used": False,
+        "fallback_used": False,
+    }
+
+
 # Part C dispatcher: route a classified follow-up intent to its handler.
 def _build_contextual_followup_answer(
     followup_intent: str,
@@ -6704,6 +6914,11 @@ def _build_contextual_followup_answer(
         return _build_safe_next_steps_answer(session_context)
     if followup_intent == "clarify_uncertainty":
         return _build_clarify_uncertainty_answer(session_context)
+    # Session 27.14 Parts C/D
+    if followup_intent == "explain_previous_answer":
+        return _build_explain_previous_answer(session_context)
+    if followup_intent == "condition_list_inquiry":
+        return _build_condition_list_answer(session_context)
     return None
 
 
@@ -6812,6 +7027,27 @@ def _answer_question_impl(
                 )
                 if _ctx_fui_result is not None:
                     return _ctx_fui_result
+
+        # Session 27.14 Part E: condition terminology resolution.
+        # When the user asks about a term that matches a recently mentioned condition.
+        if (not _ctx_fui and session_context.get("mentioned_conditions")):
+            _is_term_q = (
+                any(p in text for p in ("מה זה", "מה היא", "מה הוא", "מה זאת"))
+                or len(text) <= 45
+            )
+            if _is_term_q:
+                _e14_match = _find_matching_condition(text, session_context["mentioned_conditions"])
+                if _e14_match:
+                    _e14_gene_in_q = _detect_known_gene(text)
+                    if not _e14_gene_in_q and gene_index._GENE_INDEX_AVAILABLE:
+                        _e14_gene_in_q = _extract_gene_symbol_from_question(text)
+                    _e14_gene_cur = (session_context.get("gene_symbol") or "").strip().upper() or None
+                    _e14_is_switch = (
+                        _e14_gene_in_q and _e14_gene_cur
+                        and _e14_gene_in_q.upper() != _e14_gene_cur
+                    )
+                    if not _e14_is_switch:
+                        return _build_condition_terminology_answer(_e14_match, session_context)
 
         # Part C (27.12): gene-info question within active prenatal deletion finding.
         # No recognized follow-up intent matched; user names the gene already in context.
@@ -7314,6 +7550,37 @@ def _build_session_context_out(
         _prev_subj = session_context.get("subject")
         if _prev_subj:
             ctx_out["subject"] = _prev_subj
+
+    # Session 27.14 Part A: mentioned_conditions, last_primary_condition, last_answer_topic.
+    # Detect explicit gene switch — if gene changed, don't carry forward old conditions.
+    _sc14_new_gene = ctx_out.get("gene_symbol")
+    _sc14_prev_gene = (session_context or {}).get("gene_symbol")
+    _sc14_gene_switch = (
+        _sc14_new_gene and _sc14_prev_gene and _sc14_new_gene != _sc14_prev_gene
+    )
+
+    _sc14_new_conds = _extract_conditions_for_context(result)
+    if _sc14_new_conds:
+        ctx_out["mentioned_conditions"] = _sc14_new_conds
+        ctx_out["last_primary_condition"] = _sc14_new_conds[0]
+    elif not _sc14_gene_switch:
+        _sc14_prev_conds = (session_context or {}).get("mentioned_conditions")
+        _sc14_prev_primary = (session_context or {}).get("last_primary_condition")
+        if _sc14_prev_conds:
+            ctx_out["mentioned_conditions"] = _sc14_prev_conds
+        if _sc14_prev_primary:
+            ctx_out["last_primary_condition"] = _sc14_prev_primary
+
+    # last_answer_topic — human-readable description for follow-up display.
+    _sc14_gene = ctx_out.get("gene_symbol")
+    if _sc14_gene and matched == "gene_clinvar_summary":
+        ctx_out["last_answer_topic"] = f"תיאור כללי של {_sc14_gene}"
+    elif _sc14_gene and matched in ("vus_known_gene", "vus"):
+        ctx_out["last_answer_topic"] = f"VUS בגן {_sc14_gene}"
+    elif matched:
+        ctx_out["last_answer_topic"] = matched
+    elif (session_context or {}).get("last_answer_topic"):
+        ctx_out["last_answer_topic"] = session_context["last_answer_topic"]
 
     return ctx_out
 

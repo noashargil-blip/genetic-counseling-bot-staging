@@ -309,6 +309,14 @@ function filterPhenotypes(list) {
   return list.filter(p => !_TRIVIAL_PHENOS.has((p || '').toLowerCase().trim()));
 }
 
+// Session 27.14 Part H: strip markdown table lines from LLM answer text.
+// The frontend has no markdown renderer (white-space:pre-wrap), so pipe characters
+// from LLM-generated tables appear as literal text.
+function stripMarkdownTableLines(text) {
+  if (!text || !text.includes('|')) return text;
+  return text.split('\n').filter(line => !/^\s*\|/.test(line)).join('\n').trim();
+}
+
 // ── Gene metadata expandable panel ────────────────────────────────────────────
 function buildGeneMetadataHtml(meta) {
   if (!meta) return '';
@@ -386,7 +394,7 @@ function renderMessages() {
     const isBot = m.role !== 'user';
     bubble.className = `msg-bubble msg-bubble--${m.role === 'user' ? 'user' : 'bot'} ${isBot ? safetyBadgeClass(m.safetyLevel) : ''}`;
 
-    let html = `<p class="msg-text">${escHtml(m.text)}</p>`;
+    let html = `<p class="msg-text">${escHtml(stripMarkdownTableLines(m.text))}</p>`;
 
     if (isBot && m.role !== 'bot-pending' && !m.isWelcome) {
       if (m.geneMetadata) {
