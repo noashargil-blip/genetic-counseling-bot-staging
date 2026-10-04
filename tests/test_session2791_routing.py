@@ -519,8 +519,8 @@ class TestVersionEndpoint:
     def test_version_session_version_value(self):
         r = client.get("/version")
         d = r.json()
-        assert d["session_version"] == "Session 27.9.1", (
-            f"Expected 'Session 27.9.1', got {d.get('session_version')!r}"
+        assert d["session_version"] == "Session 27.15 (final)", (
+            f"Expected 'Session 27.15 (final)', got {d.get('session_version')!r}"
         )
 
     def test_version_prompt_version_value(self):
@@ -531,7 +531,7 @@ class TestVersionEndpoint:
         )
 
     def test_health_module_session_version(self):
-        assert _health.SESSION_VERSION == "Session 27.9.1"
+        assert _health.SESSION_VERSION == "Session 27.15 (final)"
 
     def test_health_module_prompt_version(self):
         assert _health.PROMPT_VERSION == "s2791"

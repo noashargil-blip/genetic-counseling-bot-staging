@@ -340,6 +340,32 @@ class SafeSessionContext(BaseModel):
         description="Source class: curated | grounded | physician_approved | ai_unreviewed | no_info",
     )
 
+    # Session 27.14 Part A: entity-aware follow-up context (condition names
+    # mentioned in a prior gene answer). Free-text like finding_type/test_type
+    # above — product-generated ClinVar phenotype labels, not user input.
+    mentioned_conditions: Optional[List[str]] = Field(
+        None,
+        description="Up to 5 condition/phenotype names mentioned in the previous gene answer",
+    )
+    last_primary_condition: Optional[str] = Field(
+        None, max_length=80,
+        description="The primary condition name mentioned in the previous answer",
+    )
+    last_answer_topic: Optional[str] = Field(
+        None, max_length=80,
+        description="Human-readable description of the previous answer's topic, for follow-up display",
+    )
+
+    @field_validator("mentioned_conditions", mode="before")
+    @classmethod
+    def _validate_mentioned_conditions(cls, v: object) -> Optional[list]:
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            return None
+        out = [str(c).strip()[:80] for c in v if str(c).strip()][:5]
+        return out or None
+
     @field_validator("subject", mode="before")
     @classmethod
     def _validate_subject(cls, v: object) -> Optional[str]:

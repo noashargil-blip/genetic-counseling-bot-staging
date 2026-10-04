@@ -28,7 +28,8 @@ LLM_POLICY_VERSION = "2.0.0"
 
 # Session version — identifies the counseling-engine session that produced this build.
 # Format: Session <major>.<minor>.<patch>
-SESSION_VERSION = "Session 27.9.1"
+# Session 27.15: final release validation and project closure — architecture frozen.
+SESSION_VERSION = "Session 27.15 (final)"
 
 # Prompt version — identifies the prompt/policy generation applied to AI responses.
 # Used in physician review DB entries and debug metadata.

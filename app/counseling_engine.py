@@ -315,6 +315,7 @@ def _persist_reviewable_ai_expansion(
         return None
     try:
         from app import review_db as _rdb
+        from app.health import SAFETY_POLICY_VERSION as _safety_policy_version
         record = _rdb.create_draft(
             draft_type=draft_type,
             original_ai_text=text_he,
@@ -324,6 +325,7 @@ def _persist_reviewable_ai_expansion(
             model_provider=model_provider or draft.get("generated_by_provider"),
             model_name=draft.get("generated_by_model"),
             prompt_version=prompt_version,
+            safety_policy_version=_safety_policy_version,
             source_metadata=source_metadata,
         )
         if record:
@@ -3452,6 +3454,8 @@ _SURGERY_DECISION_RE = re.compile(
     r"|לעבור\s+ניתוח"
     # "כריתה מניעתית" — standalone preventive mastectomy, always a major decision
     r"|כריתה\s+מניע"
+    # "איזה ניתוח/כריתה ... לעשות/מומלץ" — "which surgery is recommended for me" phrasing
+    r"|איזה\s+(?:ניתוח|כריתה|כריתת)"
     r"|mastectomy"
     r"|preventive\s+surgery",
     re.IGNORECASE,
@@ -4908,6 +4912,7 @@ def _generate_unverified_gene_draft(
             "warning_he": _UNVERIFIED_DRAFT_WARNING_HE,
             "text_he": text,
             "generated_by_model": model_name,
+            "generated_by_provider": provider_name,
             "review_status": "unreviewed",
             "approved": False,
             "generated_at": datetime.now(timezone.utc).isoformat(),
